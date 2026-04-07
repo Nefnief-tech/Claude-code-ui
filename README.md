@@ -1,175 +1,92 @@
-# Electrobun Starter
+<div align="center">
+  <img src="screenshot.png" alt="cc-ui" width="800" />
 
-An opinionated starter template for building desktop applications with [Electrobun](https://electrobun.dev/).
+  # cc-ui
 
-**Note:** Electrobun is NOT Electron. Do not use Electron APIs or patterns. See the [Electrobun docs](https://blackboard.sh/electrobun/docs/) for API reference.
+  A desktop interface for Claude AI. Chat, code, commit, and deploy — all in one window.
 
-## Create a New Project
+  [Download](#getting-started) · [Features](#features) · [Development](#development)
 
-**Option A — GitHub template** (requires the repo to be marked as a template in Settings):
+</div>
+
+---
+
+## What is this?
+
+cc-ui is a native desktop app that puts Claude AI directly into your development workflow. Instead of switching between a browser tab and your editor, you get a persistent AI assistant with full context about your projects — right on your desktop.
+
+Built with [Electrobun](https://electrobun.dev/), React 19, and Tailwind CSS.
+
+## Features
+
+- **AI Chat** — Real-time conversations with Claude, streaming responses, and full message history per project
+- **Multi-Project Support** — Organize sessions by project, each with its own context and conversation history
+- **Built-in Git** — Stage, diff, commit, and push without leaving the app. Visual diffs with color-coded changes
+- **Skills System** — Extend functionality with slash commands. Install community skills or create your own
+- **Mobile Access** — Scan a QR code to continue conversations from your phone with real-time sync
+- **Browser Panel** — Auto-detected dev servers open in a built-in browser panel alongside your chat
+- **Dark & Light Mode** — System-aware theme with smooth switching
+- **Local First** — Your code and API key never leave your machine. No telemetry, no accounts
+
+## Getting Started
+
+### Prerequisites
+
+- [Bun](https://bun.sh/) runtime
+- An [Anthropic API key](https://console.anthropic.com/)
+
+### Install & Run
 
 ```bash
-gh repo create my-app --template mattgi/electrobun-starter --clone
-cd my-app
-bun run scripts/init.ts myapp
+git clone https://github.com/Nefnief-tech/Claude-code-ui.git
+cd Claude-code-ui
 bun install
+bun run start
 ```
 
-**Option B — degit** (no git history):
+On first launch, you'll be prompted to enter your API key. That's it.
+
+## Development
 
 ```bash
-bunx degit mattgi/electrobun-starter my-app
-cd my-app
-bun run scripts/init.ts myapp
 bun install
+bun run start        # Build and launch
+bun run dev          # Watch mode — rebuilds on file changes
+bun run dev:hmr      # HMR via Vite dev server
+bun run lint         # Lint with Biome
+bun run lint:fix     # Auto-fix lint issues
 ```
-
-The init script renames `product` to your app name across all config files. Pass `--identifier` to customize the bundle ID:
-
-```bash
-bun run scripts/init.ts myapp --identifier com.mycompany.myapp
-```
-
-## What's Included
-
-- **React 19** with TypeScript for the webview UI
-- **Vite 6** for fast development builds with HMR support
-- **Tailwind CSS 4** for styling
-- **shadcn/ui** pre-configured (New York style, neutral base)
-- **Biome** for linting and formatting
-- **Type-safe RPC** between main process and webview via shared schema
-- **Bun** as the runtime and package manager
 
 ## Project Structure
 
 ```
 src/
-  bun/            # Main process (Bun runtime)
-    index.ts      # App entry point, window creation, RPC handlers, menu
-  mainview/       # Webview UI (React + Vite)
-    components/   # React components (including shadcn/ui)
-    lib/          # Utilities (cn(), electrobun RPC client)
-    index.html    # HTML entry point
-    index.tsx     # React root
-    index.css     # Tailwind + theme tokens
-shared/           # Shared types between main and webview
-  rpc.ts          # RPC schema definition (type-safe contract)
+  bun/              # Main process (Bun runtime)
+    index.ts        # App entry, window creation, RPC handlers
+    agent.ts        # Claude agent / chat logic
+    git.ts          # Git operations
+    skills.ts       # Skills management
+    mobile-server.ts # Mobile access server
+  mainview/         # Webview UI (React + Vite)
+    components/     # UI components
+      ui/           # shadcn/ui primitives
+    lib/            # Hooks, utilities, RPC client
+  shared/
+    rpc.ts          # Type-safe RPC schema
+landing/            # Landing page
 ```
 
-## Development
+## Tech Stack
 
-### Quick start
-
-```bash
-bun install
-bun run start        # Build webview + launch app (one-shot)
-```
-
-### Development with file watching
-
-```bash
-bun run dev          # Electrobun watches source files, rebuilds + relaunches on change
-```
-
-### Development with Hot Module Replacement
-
-```bash
-bun run dev:hmr      # Runs Vite dev server (port 5173) + Electrobun concurrently
-```
-
-The main process probes `localhost:5173` at startup. If the Vite dev server is running, it loads from there instead of the bundled `views://` assets. This gives you instant HMR for the webview UI without rebuilding the whole app.
-
-### Linting
-
-```bash
-bun run lint         # Check with Biome
-bun run lint:fix     # Auto-fix
-```
-
-## Adding UI Components
-
-This project uses [shadcn/ui](https://ui.shadcn.com/) with the New York style. To add components:
-
-```bash
-bunx shadcn@latest add button
-bunx shadcn@latest add dialog
-```
-
-Components are placed in `src/mainview/components/ui/`. The `cn()` utility is at `src/mainview/lib/utils.ts`.
-
-## RPC (Main <-> Webview Communication)
-
-The type-safe RPC contract lives in `shared/rpc.ts`. Both sides import from it:
-
-- **Main process** (`src/bun/index.ts`): `BrowserView.defineRPC<MainRPC>()` — defines request handlers and message listeners
-- **Webview** (`src/mainview/lib/electrobun.ts`): `Electroview.defineRPC<MainRPC>()` — calls requests and sends messages
-
-To add a new RPC method:
-
-1. Add the type to `shared/rpc.ts` under `bun.requests` or `bun.messages`
-2. Implement the handler in `src/bun/index.ts`
-3. Call it from the webview via `electrobun.rpc.request("methodName", params)`
-
-## Building & Releasing
-
-Electrobun uses `--env` to distinguish build channels:
-
-| Channel | Command | Purpose |
-|---|---|---|
-| `dev` | `bun run start` | Local development build, launches immediately |
-| `canary` | `bun run build:canary` | Pre-release testing build |
-| `stable` | `bun run build:stable` | Production release build |
-
-All build scripts run `vite build` first, then `electrobun build`. The `copy` rules in `electrobun.config.ts` map Vite output into the app bundle:
-
-```
-dist/index.html   → views/mainview/index.html
-dist/assets/      → views/mainview/assets/
-```
-
-### Release & updates
-
-Electrobun has a built-in delta update system. Configure the release URL in `electrobun.config.ts`:
-
-```ts
-release: {
-  baseUrl: "https://your-cdn.com/releases/",
-}
-```
-
-Then build a stable release:
-
-```bash
-bun run build:stable
-```
-
-This generates the app bundle plus patch files for delta updates. Upload the build output to your `baseUrl` location. The app can check for and apply updates at runtime using the `Updater` API from `electrobun/bun`.
-
-### macOS code signing and notarization
-
-In `electrobun.config.ts`, set:
-
-```ts
-mac: {
-  codesign: true,
-  notarize: true,
-  entitlements: { /* ... */ },
-}
-```
-
-See the [Electrobun docs](https://blackboard.sh/electrobun/docs/) for details on certificates and notarization setup.
-
-### Cross-platform
-
-The config includes `mac`, `linux`, and `win` blocks. Set `bundleCEF: true` on each platform to include the Chromium Embedded Framework in the app bundle for distribution (set to `false` during development to save build time).
-
-## Key Config Files
-
-| File | Purpose |
+| Layer | Tech |
 |---|---|
-| `electrobun.config.ts` | App metadata, build settings, platform config, copy rules, release URL |
-| `vite.config.ts` | Vite build config, dev server port, path aliases |
-| `tsconfig.json` | TypeScript config covering both `src/` and `shared/` |
-| `components.json` | shadcn/ui CLI configuration |
-| `biome.json` | Linting and formatting rules |
-| `postcss.config.mjs` | PostCSS with Tailwind CSS 4 plugin |
+| Desktop Runtime | [Electrobun](https://electrobun.dev/) |
+| Frontend | React 19, TypeScript |
+| Styling | Tailwind CSS 4, shadcn/ui |
+| Build | Vite 6 |
+| Backend | Bun |
+| Linting | Biome |
+
+## License
+
+MIT
