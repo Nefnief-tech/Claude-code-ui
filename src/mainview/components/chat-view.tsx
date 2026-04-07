@@ -187,39 +187,6 @@ function ToolUseBlock({ part }: { part: Extract<MessagePart, { type: "tool_use" 
 	);
 }
 
-function ToolResultBlock({ part }: { part: Extract<MessagePart, { type: "tool_result" }> }) {
-	const [open, setOpen] = useState(false);
-	return (
-		<div className="my-1.5 rounded-lg border border-border/60 bg-secondary/30 overflow-hidden">
-			<button
-				type="button"
-				onClick={() => setOpen(!open)}
-				className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-muted-foreground hover:text-foreground transition-colors"
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					width="12"
-					height="12"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="2"
-					strokeLinecap="round"
-					strokeLinejoin="round"
-					className={cn("transition-transform", open && "rotate-90")}
-				>
-					<path d="m9 18 6-6-6-6" />
-				</svg>
-				<span className="text-xs">Result</span>
-			</button>
-			{open && (
-				<pre className="max-h-48 overflow-auto border-t border-border/60 bg-background/50 p-3 text-xs font-mono leading-relaxed">
-					{part.output}
-				</pre>
-			)}
-		</div>
-	);
-}
 
 function ThinkingBlock({ part }: { part: Extract<MessagePart, { type: "thinking" }> }) {
 	const [open, setOpen] = useState(false);
@@ -250,6 +217,142 @@ function ThinkingBlock({ part }: { part: Extract<MessagePart, { type: "thinking"
 				<pre className="whitespace-pre-wrap border-t border-dashed border-border/80 p-3 text-xs font-mono leading-relaxed text-muted-foreground/80">
 					{part.text}
 				</pre>
+			)}
+		</div>
+	);
+}
+
+type ToolCallInfo = {
+	toolName: string;
+	toolInput: string;
+	result?: string;
+};
+
+type ProcessedPart =
+	| { type: "text"; text: string }
+	| { type: "thinking"; text: string }
+	| { type: "tool_call"; call: ToolCallInfo }
+	| { type: "tool_group"; calls: ToolCallInfo[] };
+
+function processParts(parts: MessagePart[]): ProcessedPart[] {
+	// Step 1: Pair each tool_use with its following tool_result
+	const paired: Array<
+		| { type: "text"; text: string }
+		| { type: "thinking"; text: string }
+		| ToolCallInfo
+	> = [];
+	let pendingUse: { toolName: string; toolInput: string } | null = null;
+
+	for (const part of parts) {
+		switch (part.type) {
+			case "tool_use":
+				if (pendingUse) paired.push(pendingUse);
+				pendingUse = { toolName: part.toolName, toolInput: part.toolInput };
+				break;
+			case "tool_result":
+				if (pendingUse) {
+					paired.push({ ...pendingUse, result: part.output });
+					pendingUse = null;
+				}
+				break;
+			default:
+				if (pendingUse) {
+					paired.push(pendingUse);
+					pendingUse = null;
+				}
+				paired.push(part);
+				break;
+		}
+	}
+	if (pendingUse) paired.push(pendingUse);
+
+	// Step 2: Group consecutive non-Edit/Write tool calls into one block
+	const result: ProcessedPart[] = [];
+	for (const item of paired) {
+		const isToolCall = "toolName" in item;
+		const isProminent = isToolCall && (item.toolName === "Edit" || item.toolName === "Write");
+
+		if (isToolCall && !isProminent) {
+			const last = result[result.length - 1];
+			if (last?.type === "tool_group") {
+				last.calls.push(item);
+			} else {
+				result.push({ type: "tool_group", calls: [item] });
+			}
+		} else if (isToolCall) {
+			result.push({ type: "tool_call", call: item });
+		} else {
+			result.push(item);
+		}
+	}
+	return result;
+}
+
+function getToolLabel(call: ToolCallInfo): string {
+	let parsed: Record<string, unknown> | null = null;
+	try { parsed = JSON.parse(call.toolInput); } catch { /* not JSON */ }
+	const p = parsed || {};
+	if (p.file_path) return String(p.file_path).split("/").pop() || String(p.file_path);
+	if (p.command) return String(p.command).slice(0, 60);
+	if (p.pattern) return String(p.pattern);
+	return "";
+}
+
+function ToolGroupBlock({ calls }: { calls: ToolCallInfo[] }) {
+	const [open, setOpen] = useState(false);
+	const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+
+	const toolTypes = [...new Set(calls.map((c) => c.toolName))];
+	const typeLabel = toolTypes.join(" \u00b7 ");
+
+	return (
+		<div className="my-1.5 rounded-lg border border-border/60 bg-secondary/30 overflow-hidden">
+			<button
+				type="button"
+				onClick={() => setOpen(!open)}
+				className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground transition-colors"
+			>
+				<svg
+					xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"
+					fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+					className={cn("transition-transform", open && "rotate-90")}
+				>
+					<path d="m9 18 6-6-6-6" />
+				</svg>
+				<span className="font-mono font-medium">{calls.length} operations</span>
+				<span className="text-muted-foreground/50">{typeLabel}</span>
+			</button>
+			{open && (
+				<div className="border-t border-border/40 bg-background/30">
+					{calls.map((call, i) => {
+						const isExpanded = expandedIdx === i;
+						const label = getToolLabel(call);
+						return (
+							<div key={i} className="border-t border-border/30 first:border-t-0">
+								<button
+									type="button"
+									onClick={() => setExpandedIdx(isExpanded ? null : i)}
+									className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 transition-colors"
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24"
+										fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+										className={cn("transition-transform shrink-0", isExpanded && "rotate-90")}
+									>
+										<path d="m9 18 6-6-6-6" />
+									</svg>
+									<span className="font-mono shrink-0">{call.toolName}</span>
+									<span className="truncate text-muted-foreground/60">{label}</span>
+								</button>
+								{isExpanded && (
+									<pre className="max-h-48 overflow-auto border-t border-border/30 bg-background/50 p-2 text-xs font-mono leading-relaxed">
+										{call.result || call.toolInput}
+									</pre>
+								)}
+							</div>
+						);
+					})}
+				</div>
 			)}
 		</div>
 	);
@@ -351,8 +454,24 @@ function MarkdownContent({ content }: { content: string }) {
 	);
 }
 
-const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
-	const isUser = message.role === "user";
+function groupMessages(messages: ChatMessage[]): ChatMessage[][] {
+	const groups: ChatMessage[][] = [];
+	for (const msg of messages) {
+		const lastGroup = groups[groups.length - 1];
+		if (lastGroup && lastGroup[0].role === msg.role) {
+			lastGroup.push(msg);
+		} else {
+			groups.push([msg]);
+		}
+	}
+	return groups;
+}
+
+const MessageBubble = React.memo(function MessageBubble({ messages }: { messages: ChatMessage[] }) {
+	const isUser = messages[0].role === "user";
+	const allParts = messages.flatMap((m) => m.parts);
+	const isEmpty = allParts.length === 0 && !isUser;
+	const processed = isUser ? null : processParts(allParts);
 
 	return (
 		<div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -363,34 +482,36 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
 						: "bg-secondary/60 text-foreground rounded-bl-md"
 				}`}
 			>
-				{message.parts.length === 0 && !isUser && (
+				{isEmpty && (
 					<div className="flex items-center gap-1.5">
 						<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/30" />
 						<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/30 [animation-delay:0.2s]" />
 						<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/30 [animation-delay:0.4s]" />
 					</div>
 				)}
-				{message.parts.map((part, i) => {
+				{isUser ? allParts.map((part, i) => {
+					if (part.type === "text") {
+						return (
+							<div key={i} className="whitespace-pre-wrap text-[14px] leading-relaxed">
+								{part.text}
+							</div>
+						);
+					}
+					return null;
+				}) : processed!.map((part, i) => {
 					switch (part.type) {
 						case "text":
-							if (isUser) {
-								return (
-									<div key={i} className="whitespace-pre-wrap text-[14px] leading-relaxed">
-										{part.text}
-									</div>
-								);
-							}
 							return (
 								<div key={i} className="text-[14px]">
 									<MarkdownContent content={part.text} />
 								</div>
 							);
-						case "tool_use":
-							return <ToolUseBlock key={i} part={part} />;
-						case "tool_result":
-							return <ToolResultBlock key={i} part={part} />;
 						case "thinking":
 							return <ThinkingBlock key={i} part={part} />;
+						case "tool_call":
+							return <ToolUseBlock key={i} part={{ type: "tool_use" as const, toolName: part.call.toolName, toolInput: part.call.toolInput }} />;
+						case "tool_group":
+							return <ToolGroupBlock key={i} calls={part.calls} />;
 					}
 				})}
 			</div>
@@ -536,8 +657,8 @@ export function ChatView({
 					</div>
 				) : (
 					<div className="mx-auto max-w-3xl space-y-4 p-6">
-						{messages.map((msg) => (
-							<MessageBubble key={msg.id} message={msg} />
+						{groupMessages(messages).map((group) => (
+							<MessageBubble key={group[0].id} messages={group} />
 						))}
 					</div>
 				)}
