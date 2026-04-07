@@ -1,0 +1,262 @@
+import { execSync } from "node:child_process";
+
+export type GitStatus = {
+	branch: string;
+	ahead: number;
+	behind: number;
+	staged: number;
+	unstaged: number;
+	untracked: number;
+	insertions: number;
+	deletions: number;
+	modified: string[];
+	stagedFiles: string[];
+	untrackedFiles: string[];
+};
+
+export type GitDiffSummary = {
+	insertions: number;
+	deletions: number;
+	files: { path: string; insertions: number; deletions: number }[];
+};
+
+function runGit(args: string, cwd: string): string | null {
+	try {
+		return execSync(`git ${args}`, {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+			timeout: 10000,
+		}).trim();
+	} catch {
+		return null;
+	}
+}
+
+export function isGitRepo(cwd: string): boolean {
+	return runGit("rev-parse --is-inside-work-tree", cwd) === "true";
+}
+
+export function gitStatus(cwd: string): GitStatus | null {
+	if (!isGitRepo(cwd)) return null;
+
+	const branch = runGit("rev-parse --abbrev-ref HEAD", cwd) ?? "unknown";
+
+	// Ahead/behind
+	const abRaw = runGit(
+		`rev-list --left-right --count HEAD...@{upstream} 2>/dev/null`,
+		cwd,
+	);
+	let ahead = 0;
+	let behind = 0;
+	if (abRaw) {
+		const parts = abRaw.split("\t");
+		ahead = Number.parseInt(parts[0]) || 0;
+		behind = Number.parseInt(parts[1]) || 0;
+	}
+
+	// Porcelain status
+	const porcelain = runGit("status --porcelain=v1", cwd) ?? "";
+	let staged = 0;
+	let unstaged = 0;
+	let untracked = 0;
+	const modified: string[] = [];
+	const stagedFiles: string[] = [];
+	const untrackedFiles: string[] = [];
+
+	for (const line of porcelain.split("\n")) {
+		if (!line) continue;
+		const x = line[0];
+		const y = line[1];
+		const file = line.slice(3);
+
+		if (x === "?") {
+			untracked++;
+			untrackedFiles.push(file);
+		} else {
+			if (x !== " " && x !== "?") {
+				staged++;
+				stagedFiles.push(file);
+			}
+			if (y !== " " || x === " ") {
+				unstaged++;
+				if (!modified.includes(file)) modified.push(file);
+			}
+			if (x !== " ") modified.push(file);
+		}
+	}
+
+	// Diff stats
+	const { insertions, deletions } = diffStats(cwd);
+
+	return {
+		branch,
+		ahead,
+		behind,
+		staged,
+		unstaged,
+		untracked,
+		insertions,
+		deletions,
+		modified: [...new Set(modified)],
+		stagedFiles,
+		untrackedFiles,
+	};
+}
+
+function diffStats(cwd: string): { insertions: number; deletions: number } {
+	let insertions = 0;
+	let deletions = 0;
+
+	// Staged diff stats
+	const stagedStat = runGit("diff --cached --numstat", cwd) ?? "";
+	// Unstaged diff stats
+	const unstagedStat = runGit("diff --numstat", cwd) ?? "";
+
+	for (const line of `${stagedStat}\n${unstagedStat}`.split("\n")) {
+		if (!line) continue;
+		const parts = line.split("\t");
+		if (parts.length >= 2) {
+			insertions += Number.parseInt(parts[0]) || 0;
+			deletions += Number.parseInt(parts[1]) || 0;
+		}
+	}
+
+	return { insertions, deletions };
+}
+
+export function gitDiff(cwd: string, staged = false): string {
+	const flag = staged ? "--cached" : "";
+	return runGit(`diff ${flag}`, cwd) ?? "";
+}
+
+export function gitCommit(
+	cwd: string,
+	message: string,
+	user?: string,
+	token?: string,
+): { success: boolean; error?: string } {
+	try {
+		if (user) {
+			execSync(
+				`git -c user.name="${user.replace(/"/g, '\\"')}" -c user.email="${user.replace(/"/g, '\\"')}" commit -m ${JSON.stringify(message)}`,
+				{ cwd, encoding: "utf-8", timeout: 10000 },
+			);
+		} else {
+			execSync(`git commit -m ${JSON.stringify(message)}`, {
+				cwd,
+				encoding: "utf-8",
+				timeout: 10000,
+			});
+		}
+		return { success: true };
+	} catch (err: unknown) {
+		const msg =
+			err instanceof Error
+				? (err as Error & { stderr?: string }).stderr?.trim() ||
+					err.message
+				: String(err);
+		return { success: false, error: msg };
+	}
+}
+
+export function gitStageAll(cwd: string): { success: boolean; error?: string } {
+	try {
+		execSync("git add -A", { cwd, encoding: "utf-8", timeout: 10000 });
+		return { success: true };
+	} catch (err: unknown) {
+		return {
+			success: false,
+			error: err instanceof Error ? err.message : String(err),
+		};
+	}
+}
+
+export function gitStageFiles(
+	cwd: string,
+	files: string[],
+): { success: boolean; error?: string } {
+	try {
+		execSync(`git add -- ${files.map((f) => `"${f}"`).join(" ")}`, {
+			cwd,
+			encoding: "utf-8",
+			timeout: 10000,
+		});
+		return { success: true };
+	} catch (err: unknown) {
+		return {
+			success: false,
+			error: err instanceof Error ? err.message : String(err),
+		};
+	}
+}
+
+export function gitPush(
+	cwd: string,
+	token?: string,
+	user?: string,
+): { success: boolean; error?: string } {
+	try {
+		// Get remote URL and inject token if provided
+		if (token && user) {
+			const remoteUrl = runGit("config remote.origin.url", cwd);
+			if (remoteUrl?.includes("github.com")) {
+				const authUrl = remoteUrl.replace(
+					/github.com/,
+					`${user}:${token}@github.com`,
+				);
+				execSync(`git remote set-url origin ${authUrl}`, {
+					cwd,
+					encoding: "utf-8",
+					timeout: 5000,
+				});
+			}
+		}
+		execSync("git push", { cwd, encoding: "utf-8", timeout: 30000 });
+		// Restore original URL if we modified it
+		if (token && user) {
+			try {
+				execSync("git remote set-url origin $(git config remote.origin.url | sed 's/[^@]*@//')", {
+					cwd,
+					encoding: "utf-8",
+					timeout: 5000,
+				});
+			} catch {
+				// best effort
+			}
+		}
+		return { success: true };
+	} catch (err: unknown) {
+		return {
+			success: false,
+			error: err instanceof Error ? err.message : String(err),
+		};
+	}
+}
+
+export function gitFetch(cwd: string): { success: boolean; error?: string } {
+	try {
+		execSync("git fetch", { cwd, encoding: "utf-8", timeout: 30000 });
+		return { success: true };
+	} catch (err: unknown) {
+		return {
+			success: false,
+			error: err instanceof Error ? err.message : String(err),
+		};
+	}
+}
+
+export function gitLog(
+	cwd: string,
+	count = 10,
+): { hash: string; message: string; author: string; date: string }[] {
+	const raw = runGit(
+		`log --pretty=format:"%h%x00%s%x00%an%x00%ar" -n ${count}`,
+		cwd,
+	);
+	if (!raw) return [];
+	return raw.split("\n").map((line) => {
+		const [hash, message, author, date] = line.split("\0");
+		return { hash: hash ?? "", message: message ?? "", author: author ?? "", date: date ?? "" };
+	});
+}

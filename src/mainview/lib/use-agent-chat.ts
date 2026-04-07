@@ -1,0 +1,245 @@
+import { electrobun } from "@/lib/electrobun";
+import type { AgentChunkPayload } from "shared/rpc";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+export type MessagePart =
+	| { type: "text"; text: string }
+	| { type: "tool_use"; toolName: string; toolInput: string }
+	| { type: "tool_result"; toolUseId: string; output: string }
+	| { type: "thinking"; text: string };
+
+export type ChatMessage = {
+	id: string;
+	role: "user" | "assistant";
+	parts: MessagePart[];
+};
+
+function appendTextToLastPart(
+	parts: MessagePart[],
+	text: string,
+): MessagePart[] {
+	if (parts.length === 0) {
+		return [{ type: "text", text }];
+	}
+	const last = parts[parts.length - 1];
+	if (last.type === "text") {
+		return [
+			...parts.slice(0, -1),
+			{ type: "text", text: last.text + text },
+		];
+	}
+	return [...parts, { type: "text", text }];
+}
+
+function appendThinking(
+	parts: MessagePart[],
+	text: string,
+): MessagePart[] {
+	if (parts.length > 0) {
+		const last = parts[parts.length - 1];
+		if (last.type === "thinking") {
+			return [
+				...parts.slice(0, -1),
+				{ type: "thinking", text: last.text + text },
+			];
+		}
+	}
+	return [...parts, { type: "thinking", text }];
+}
+
+let nextId = 0;
+function uid(): string {
+	return `msg-${++nextId}`;
+}
+
+export function useAgentChat() {
+	const [messages, setMessages] = useState<ChatMessage[]>([]);
+	const [isStreaming, setIsStreaming] = useState(false);
+	const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
+	const assistantIdRef = useRef<string | null>(null);
+	const activeSessionIdRef = useRef<string | null>(null);
+	const credentialsRef = useRef<{ apiKey?: string; baseUri?: string }>({});
+
+	// Track which session we're currently viewing
+	const setActiveSession = useCallback((id: string | null) => {
+		activeSessionIdRef.current = id;
+	}, []);
+
+	const handleChunk = useCallback((chunk: AgentChunkPayload) => {
+		// Ignore chunks if not streaming (stale from old session)
+		if (!assistantIdRef.current) return;
+
+		switch (chunk.type) {
+			case "text":
+				setMessages((prev) => {
+					const id = assistantIdRef.current;
+					if (!id) return prev;
+					return prev.map((m) =>
+						m.id === id
+							? { ...m, parts: appendTextToLastPart(m.parts, chunk.text) }
+							: m,
+					);
+				});
+				break;
+			case "thinking":
+				setMessages((prev) => {
+					const id = assistantIdRef.current;
+					if (!id) return prev;
+					return prev.map((m) =>
+						m.id === id
+							? { ...m, parts: appendThinking(m.parts, chunk.text) }
+							: m,
+					);
+				});
+				break;
+			case "tool_use":
+				setMessages((prev) => {
+					const id = assistantIdRef.current;
+					if (!id) return prev;
+					return prev.map((m) =>
+						m.id === id
+							? {
+									...m,
+									parts: [
+										...m.parts,
+										{
+											type: "tool_use" as const,
+											toolName: chunk.toolName,
+											toolInput: chunk.toolInput,
+										},
+									],
+								}
+							: m,
+					);
+				});
+				break;
+			case "tool_result":
+				setMessages((prev) => {
+					const id = assistantIdRef.current;
+					if (!id) return prev;
+					return prev.map((m) =>
+						m.id === id
+							? {
+									...m,
+									parts: [
+										...m.parts,
+										{
+											type: "tool_result" as const,
+											toolUseId: chunk.toolUseId,
+											output: chunk.output,
+										},
+									],
+								}
+							: m,
+					);
+				});
+				break;
+			case "done":
+			case "error":
+				if (chunk.type === "error") {
+					setMessages((prev) => {
+						const id = assistantIdRef.current;
+						if (!id) return prev;
+						return prev.map((m) =>
+							m.id === id
+								? {
+										...m,
+										parts: [
+											...m.parts,
+											{ type: "text" as const, text: `\n\nError: ${chunk.error}` },
+										],
+									}
+								: m,
+						);
+					});
+				}
+				assistantIdRef.current = null;
+				setIsStreaming(false);
+				break;
+			case "dev_server_url":
+				setDevServerUrl(chunk.url);
+				break;
+		}
+	}, []);
+
+	useEffect(() => {
+		electrobun.rpc?.addMessageListener("agentChunk", handleChunk);
+	}, [handleChunk]);
+
+	// Load messages when switching sessions
+	const loadMessages = useCallback((msgs: ChatMessage[]) => {
+		setMessages(msgs);
+	}, []);
+
+	const sendMessage = useCallback(
+		(text: string, cwd?: string, skillContent?: string) => {
+			if (!text.trim() || isStreaming) return;
+
+			const userId = uid();
+			const assistantId = uid();
+			assistantIdRef.current = assistantId;
+
+			const displayText = text;
+			const agentText = skillContent
+				? `${skillContent}\n\n---\n\n${text}`
+				: text;
+
+			setMessages((prev) => [
+				...prev,
+				{ id: userId, role: "user", parts: [{ type: "text", text: displayText }] },
+				{ id: assistantId, role: "assistant", parts: [] },
+			]);
+			setIsStreaming(true);
+
+			electrobun.rpc?.request.sendMessage({
+				text: agentText,
+				...credentialsRef.current,
+				cwd,
+			}).catch((err) => {
+				setMessages((prev) =>
+					prev.map((m) =>
+						m.id === assistantId
+							? {
+									...m,
+									parts: [
+										{ type: "text", text: `Failed to send: ${err}` },
+									],
+								}
+							: m,
+					),
+				);
+				assistantIdRef.current = null;
+				setIsStreaming(false);
+			});
+		},
+		[isStreaming],
+	);
+
+	const abort = useCallback(() => {
+		electrobun.rpc?.request.abortAgent({});
+		assistantIdRef.current = null;
+		setIsStreaming(false);
+	}, []);
+
+	const setCredentials = useCallback(
+		(apiKey: string, baseUri: string) => {
+			credentialsRef.current = {
+				apiKey: apiKey || undefined,
+				baseUri: baseUri || undefined,
+			};
+		},
+		[],
+	);
+
+	return {
+		messages,
+		isStreaming,
+		sendMessage,
+		abort,
+		setCredentials,
+		loadMessages,
+		setActiveSession,
+		devServerUrl,
+		clearDevServerUrl: () => setDevServerUrl(null),
+	};
+}
