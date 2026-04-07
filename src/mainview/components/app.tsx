@@ -74,6 +74,8 @@ export function App() {
 		setActiveSession,
 		devServerUrl,
 		clearDevServerUrl,
+		sessionCost,
+		estimatedTokens,
 	} = useAgentChat();
 
 	const {
@@ -132,6 +134,7 @@ export function App() {
 	const [chatPanelWidth, setChatPanelWidth] = useState(400);
 	const chatWidthAtDragStart = useRef(400);
 	const mainRef = useRef<HTMLElement>(null);
+	const chatViewRef = useRef<{ focusInput: () => void }>(null);
 	const [toast, setToast] = useState<string | null>(null);
 	const toastTimer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -340,6 +343,26 @@ export function App() {
 		setShowOnboarding(false);
 	}, []);
 
+	// Keyboard shortcuts
+	useEffect(() => {
+		const handler = (e: KeyboardEvent) => {
+			if (e.ctrlKey || e.metaKey) {
+				if (e.key === "n") {
+					e.preventDefault();
+					handleNewSession();
+				} else if (e.key === "b") {
+					e.preventDefault();
+					setSidebarCollapsed((c) => !c);
+				} else if (e.key === "k") {
+					e.preventDefault();
+					chatViewRef.current?.focusInput();
+				}
+			}
+		};
+		window.addEventListener("keydown", handler);
+		return () => window.removeEventListener("keydown", handler);
+	}, [handleNewSession]);
+
 	const handleShowOnboarding = useCallback(() => {
 		localStorage.removeItem("cc-uui:onboarded");
 		setShowOnboarding(true);
@@ -498,10 +521,13 @@ export function App() {
 						/>
 					) : (
 						<ChatView
+							ref={chatViewRef}
 							messages={messages}
 							isStreaming={isStreaming}
 							sendMessage={handleSendMessage}
 							abort={abort}
+							sessionCost={sessionCost}
+							estimatedTokens={estimatedTokens}
 							showGitPanel={showGitPanel}
 							onToggleGitPanel={() => setShowGitPanel((p) => !p)}
 							hasGitChanges={

@@ -74,6 +74,43 @@ export function SettingsView({
 					</div>
 					<div className="h-px bg-border/60" />
 					<div className="space-y-3">
+						<div className="flex items-center gap-2">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="16"
+								height="16"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								className="text-muted-foreground"
+							>
+								<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" />
+							</svg>
+							<label className="text-sm font-medium">Keyboard Shortcuts</label>
+						</div>
+						<div className="space-y-2">
+							{[
+								["Ctrl + N", "New session"],
+								["Ctrl + B", "Toggle sidebar"],
+								["Ctrl + K", "Focus chat input"],
+							].map(([key, desc]) => (
+								<div
+									key={key}
+									className="flex items-center justify-between rounded-lg px-3 py-2"
+								>
+									<span className="text-xs text-muted-foreground">{desc}</span>
+									<kbd className="rounded-md border border-border/80 bg-secondary/60 px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+										{key}
+									</kbd>
+								</div>
+							))}
+						</div>
+					</div>
+					<div className="h-px bg-border/60" />
+					<div className="space-y-3">
 						<label className="text-sm font-medium">API Key</label>
 						<p className="text-xs text-muted-foreground">
 							Your Anthropic API key for authenticating requests.

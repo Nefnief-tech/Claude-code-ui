@@ -56,6 +56,7 @@ export function useAgentChat() {
 	const [messages, setMessages] = useState<ChatMessage[]>([]);
 	const [isStreaming, setIsStreaming] = useState(false);
 	const [devServerUrl, setDevServerUrl] = useState<string | null>(null);
+	const [sessionCost, setSessionCost] = useState(0);
 	const assistantIdRef = useRef<string | null>(null);
 	const activeSessionIdRef = useRef<string | null>(null);
 	const credentialsRef = useRef<{ apiKey?: string; baseUri?: string }>({});
@@ -135,24 +136,26 @@ export function useAgentChat() {
 				});
 				break;
 			case "done":
+				setSessionCost((prev) => prev + chunk.costUsd);
+				assistantIdRef.current = null;
+				setIsStreaming(false);
+				break;
 			case "error":
-				if (chunk.type === "error") {
-					setMessages((prev) => {
-						const id = assistantIdRef.current;
-						if (!id) return prev;
-						return prev.map((m) =>
-							m.id === id
-								? {
-										...m,
-										parts: [
-											...m.parts,
-											{ type: "text" as const, text: `\n\nError: ${chunk.error}` },
-										],
-									}
-								: m,
-						);
-					});
-				}
+				setMessages((prev) => {
+					const id = assistantIdRef.current;
+					if (!id) return prev;
+					return prev.map((m) =>
+						m.id === id
+							? {
+									...m,
+									parts: [
+										...m.parts,
+										{ type: "text" as const, text: `\n\nError: ${chunk.error}` },
+									],
+								}
+							: m,
+					);
+				});
 				assistantIdRef.current = null;
 				setIsStreaming(false);
 				break;
@@ -169,6 +172,7 @@ export function useAgentChat() {
 	// Load messages when switching sessions
 	const loadMessages = useCallback((msgs: ChatMessage[]) => {
 		setMessages(msgs);
+		setSessionCost(0);
 	}, []);
 
 	const sendMessage = useCallback(
@@ -231,6 +235,16 @@ export function useAgentChat() {
 		[],
 	);
 
+	// Rough token estimate: sum text lengths / 4
+	const estimatedTokens = messages.reduce((total, msg) => {
+		return total + msg.parts.reduce((sum, p) => {
+			if (p.type === "text" || p.type === "thinking") return sum + p.text.length;
+			if (p.type === "tool_use") return sum + p.toolInput.length;
+			if (p.type === "tool_result") return sum + p.output.length;
+			return sum;
+		}, 0);
+	}, 0) / 4;
+
 	return {
 		messages,
 		isStreaming,
@@ -241,5 +255,7 @@ export function useAgentChat() {
 		setActiveSession,
 		devServerUrl,
 		clearDevServerUrl: () => setDevServerUrl(null),
+		sessionCost,
+		estimatedTokens,
 	};
 }

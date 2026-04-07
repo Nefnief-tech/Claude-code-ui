@@ -3,7 +3,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ChatMessage, MessagePart } from "@/lib/use-agent-chat";
 import type { SkillInfo } from "@/lib/use-skills";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -358,6 +358,44 @@ function ToolGroupBlock({ calls }: { calls: ToolCallInfo[] }) {
 	);
 }
 
+function CodeBlock({ children }: { children: React.ReactNode }) {
+	const [copied, setCopied] = useState(false);
+
+	const handleCopy = useCallback(() => {
+		const codeEl = (children as React.ReactElement<{ children?: React.ReactNode }>)?.props?.children;
+		const text = typeof codeEl === "string" ? codeEl : "";
+		navigator.clipboard.writeText(text).then(() => {
+			setCopied(true);
+			setTimeout(() => setCopied(false), 1500);
+		});
+	}, [children]);
+
+	return (
+		<div className="group relative my-2">
+			<pre className="overflow-x-auto rounded-lg border border-border/60 bg-background/80 p-3 text-[13px] font-mono leading-relaxed">
+				{children}
+			</pre>
+			<button
+				type="button"
+				onClick={handleCopy}
+				className="absolute top-2 right-2 rounded-md border border-border/60 bg-secondary/80 px-1.5 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+				title="Copy code"
+			>
+				{copied ? (
+					<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+						<path d="M20 6 9 17l-5-5" />
+					</svg>
+				) : (
+					<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+						<rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+						<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+					</svg>
+				)}
+			</button>
+		</div>
+	);
+}
+
 function MarkdownContent({ content }: { content: string }) {
 	return (
 		<Markdown
@@ -403,9 +441,7 @@ function MarkdownContent({ content }: { content: string }) {
 					);
 				},
 				pre: ({ children }) => (
-					<pre className="my-2 overflow-x-auto rounded-lg border border-border/60 bg-background/80 p-3 text-[13px] font-mono leading-relaxed">
-						{children}
-					</pre>
+					<CodeBlock>{children}</CodeBlock>
 				),
 				blockquote: ({ children }) => (
 					<blockquote className="my-2 border-l-2 border-primary/30 pl-3 italic text-muted-foreground">
@@ -519,7 +555,7 @@ const MessageBubble = React.memo(function MessageBubble({ messages }: { messages
 	);
 });
 
-export function ChatView({
+export const ChatView = React.forwardRef(function ChatView({
 	messages,
 	isStreaming,
 	sendMessage,
@@ -529,6 +565,8 @@ export function ChatView({
 	hasGitChanges,
 	skills,
 	onGetSkillContent,
+	sessionCost,
+	estimatedTokens,
 }: {
 	messages: ChatMessage[];
 	isStreaming: boolean;
@@ -539,7 +577,9 @@ export function ChatView({
 	hasGitChanges?: boolean;
 	skills: SkillInfo[];
 	onGetSkillContent: (directory: string) => Promise<string>;
-}) {
+	sessionCost: number;
+	estimatedTokens: number;
+}, ref: React.Ref<{ focusInput: () => void }>) {
 	const [activeSkill, setActiveSkill] = useState<SkillInfo | null>(null);
 	const [skillContent, setSkillContent] = useState<string>("");
 	const [showPicker, setShowPicker] = useState(false);
@@ -547,6 +587,10 @@ export function ChatView({
 	const [pickerSkills, setPickerSkills] = useState<SkillInfo[]>([]);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+
+	useImperativeHandle(ref, () => ({
+		focusInput: () => inputRef.current?.focus(),
+	}), []);
 
 	const getInputValue = useCallback(() => inputRef.current?.value ?? "", []);
 
@@ -827,8 +871,15 @@ export function ChatView({
 							</button>
 						)}
 					</div>
+					{(sessionCost > 0 || estimatedTokens > 0) && (
+						<div className="flex items-center justify-end gap-2 text-[11px] text-muted-foreground/50 pt-1">
+							{sessionCost > 0 && <span>${sessionCost.toFixed(4)}</span>}
+							{sessionCost > 0 && estimatedTokens > 0 && <span>·</span>}
+							{estimatedTokens > 0 && <span>~{estimatedTokens >= 1000 ? `${(estimatedTokens / 1000).toFixed(1)}k` : Math.round(estimatedTokens)} tokens</span>}
+						</div>
+					)}
 				</form>
 			</div>
 		</div>
 	);
-}
+});
