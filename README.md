@@ -1,9 +1,11 @@
 <div align="center">
-  <img src="screenshot.png" alt="cc-ui" width="800" />
+
 
   # cc-ui
 
   A desktop interface for Claude AI. Chat, code, commit, and deploy — all in one window.
+
+  <img src="screenshot.png" alt="cc-ui" width="800" />
 
   [Download](#getting-started) · [Features](#features) · [Development](#development)
 
