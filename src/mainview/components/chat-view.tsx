@@ -1,26 +1,177 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 import type { ChatMessage, MessagePart } from "@/lib/use-agent-chat";
 import type { SkillInfo } from "@/lib/use-skills";
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-function cn(...inputs: (string | false | undefined)[]) {
-	return inputs.filter(Boolean).join(" ");
+// --- TodoWrite / TaskCreate / TaskUpdate rendering ---
+
+type TodoItem = {
+	content: string;
+	status: "pending" | "in_progress" | "completed";
+	activeForm?: string;
+};
+
+export function TodoListBlock({ input }: { input: string }) {
+	let parsed: { todos?: TodoItem[] } | null = null;
+	try { parsed = JSON.parse(input); } catch { /* not JSON */ }
+	const todos = parsed?.todos || [];
+
+	if (todos.length === 0) return null;
+
+	const completed = todos.filter(t => t.status === "completed").length;
+
+	return (
+		<div className="my-1.5 rounded-lg border border-border/60 bg-secondary/50 overflow-hidden" style={{ color: "var(--foreground)" }}>
+			<div className="flex items-center gap-2 px-3 py-2 border-b border-border/40">
+				<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0" style={{ color: "var(--primary)" }}>
+					<path d="M12 6h6" /><path d="M12 12h6" /><path d="M12 18h6" /><path d="M3 12h.01" /><path d="M3 18h.01" /><path d="M3 6h.01" />
+				</svg>
+				<span className="text-xs font-medium">Tasks</span>
+				<span className="text-[10px]" style={{ color: "var(--muted-foreground)" }}>{completed}/{todos.length}</span>
+			</div>
+			<div className="py-1">
+				{todos.map((todo, i) => (
+					<div key={i} className="flex items-start gap-2.5 px-3 py-1.5" style={{ opacity: todo.status === "completed" ? 0.4 : todo.status === "pending" ? 0.6 : 1 }}>
+						<span className="mt-0.5 shrink-0">
+							{todo.status === "completed" ? (
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "#22c55e" }}>
+									<path d="M20 6 9 17l-5-5" />
+								</svg>
+							) : todo.status === "in_progress" ? (
+								<span className="flex h-3.5 w-3.5 items-center justify-center">
+									<span className="inline-block h-2 w-2 animate-pulse rounded-full" style={{ backgroundColor: "var(--primary)" }} />
+								</span>
+							) : (
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--muted-foreground)", opacity: 0.5 }}>
+									<circle cx="12" cy="12" r="10" />
+								</svg>
+							)}
+						</span>
+						<div className="min-w-0">
+							<div className={cn(
+								"text-xs leading-relaxed",
+								todo.status === "completed" && "line-through",
+								todo.status === "in_progress" && "font-semibold",
+							)}>
+									{todo.activeForm && todo.status === "in_progress" ? todo.activeForm : todo.content}
+							</div>
+						</div>
+					</div>
+				))}
+			</div>
+		</div>
+	);
 }
 
-function ToolUseBlock({ part }: { part: Extract<MessagePart, { type: "tool_use" }> }) {
+// --- AskUserQuestion rendering ---
+
+export function AskQuestionBlock({ input, result }: { input: string; result?: string }) {
+	let parsed: { questions?: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; multiSelect?: boolean }> } | null = null;
+	try { parsed = JSON.parse(input); } catch { /* not JSON */ }
+	const questions = parsed?.questions || [];
+
+	// Try to find chosen answers from the result
+	// Result formats: JSON with question keys, or plain text matching a label
+	let answers: Record<string, string> = {};
+	if (result) {
+		try {
+			const parsedResult = JSON.parse(result);
+			if (typeof parsedResult === "object" && parsedResult !== null) {
+				answers = parsedResult as Record<string, string>;
+			}
+		} catch {
+			// Result is plain text — try to match against option labels
+			for (const q of questions) {
+				if (q.options) {
+					const match = q.options.find(o => o.label.toLowerCase() === result.trim().toLowerCase());
+					if (match) answers[q.question] = match.label;
+				}
+			}
+		}
+	}
+
+	if (questions.length === 0) return null;
+
+	return (
+		<div className="my-1.5 rounded-lg border border-border/60 bg-secondary/50 overflow-hidden" style={{ color: "var(--foreground)" }}>
+			<div className="flex items-center gap-2 px-3 py-2 border-b border-border/40">
+				<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0" style={{ color: "var(--primary)" }}>
+					<circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><path d="M12 17h.01" />
+				</svg>
+				<span className="text-xs font-medium">Question</span>
+			</div>
+			<div className="p-3 space-y-3">
+				{questions.map((q, qi) => {
+					const chosenAnswer = answers[q.question];
+					return (
+						<div key={qi}>
+							{q.header && (
+								<span className="inline-block rounded-md px-1.5 py-0.5 text-[10px] font-medium mb-1.5" style={{ backgroundColor: "color-mix(in oklch, var(--primary) 15%, transparent)", color: "var(--primary)" }}>{q.header}</span>
+							)}
+							<div className="text-xs mb-2">{q.question}</div>
+							{q.options && q.options.length > 0 && (
+								<div className="space-y-1.5">
+									{q.options.map((opt, oi) => {
+										const isChosen = chosenAnswer === opt.label
+											|| (typeof chosenAnswer === "string" && chosenAnswer.toLowerCase().includes(opt.label.toLowerCase()))
+											|| (result && !chosenAnswer && result.trim().toLowerCase() === opt.label.toLowerCase());
+										return (
+											<div
+												key={oi}
+												className="rounded-md border px-2.5 py-1.5 text-xs transition-colors"
+												style={{
+													borderColor: isChosen ? "var(--primary)" : "var(--border)",
+													backgroundColor: isChosen ? "color-mix(in oklch, var(--primary) 15%, transparent)" : "var(--background)",
+													opacity: isChosen ? 1 : 0.6,
+												}}
+											>
+												<div className="flex items-center gap-1.5">
+													{isChosen && (
+														<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0" style={{ color: "var(--primary)" }}>
+															<path d="M20 6 9 17l-5-5" />
+														</svg>
+													)}
+													<span className={cn("font-medium", isChosen && "font-semibold")} style={{ color: isChosen ? "var(--primary)" : "inherit" }}>{opt.label}</span>
+												</div>
+												{opt.description && (
+													<div className="text-[11px] mt-0.5" style={{ color: "var(--muted-foreground)" }}>{opt.description}</div>
+												)}
+											</div>
+										);
+									})}
+								</div>
+							)}
+						</div>
+					);
+				})}
+			</div>
+		</div>
+	);
+}
+
+export function ToolUseBlock({ part, result }: { part: Extract<MessagePart, { type: "tool_use" }>; result?: string }) {
 	const [open, setOpen] = useState(part.toolName === "Edit" || part.toolName === "Write");
-	const isEdit = part.toolName === "Edit";
-	const isWrite = part.toolName === "Write";
+
+	// Route TodoWrite to custom renderer
+	if (part.toolName === "TodoWrite" || part.toolName === "TodoRead") {
+		return <TodoListBlock input={part.toolInput} />;
+	}
+
+	// Route AskUserQuestion to custom renderer
+	if (part.toolName === "AskUserQuestion") {
+		return <AskQuestionBlock input={part.toolInput} result={result} />;
+	}
 
 	let parsed: Record<string, unknown> | null = null;
 	try { parsed = JSON.parse(part.toolInput); } catch { /* not JSON */ }
 
 	// Show inline diff preview for Edit tool
-	if (isEdit && parsed) {
+	if (part.toolName === "Edit" && parsed) {
 		const filePath = typeof parsed.file_path === "string" ? parsed.file_path : "";
 		const oldStr = typeof parsed.old_string === "string" ? parsed.old_string : "";
 		const newStr = typeof parsed.new_string === "string" ? parsed.new_string : "";
@@ -81,7 +232,7 @@ function ToolUseBlock({ part }: { part: Extract<MessagePart, { type: "tool_use" 
 	}
 
 	// Show file content preview for Write tool
-	if (isWrite && parsed) {
+	if (part.toolName === "Write" && parsed) {
 		const filePath = typeof parsed.file_path === "string" ? parsed.file_path : "";
 		const content = typeof parsed.content === "string" ? parsed.content : "";
 		const fileName = filePath.split("/").pop() || filePath;
@@ -188,7 +339,7 @@ function ToolUseBlock({ part }: { part: Extract<MessagePart, { type: "tool_use" 
 }
 
 
-function ThinkingBlock({ part }: { part: Extract<MessagePart, { type: "thinking" }> }) {
+export function ThinkingBlock({ part }: { part: Extract<MessagePart, { type: "thinking" }> }) {
 	const [open, setOpen] = useState(false);
 	return (
 		<div className="my-1.5 rounded-lg border border-dashed border-border/80 bg-muted/20 overflow-hidden">
@@ -222,19 +373,19 @@ function ThinkingBlock({ part }: { part: Extract<MessagePart, { type: "thinking"
 	);
 }
 
-type ToolCallInfo = {
+export type ToolCallInfo = {
 	toolName: string;
 	toolInput: string;
 	result?: string;
 };
 
-type ProcessedPart =
+export type ProcessedPart =
 	| { type: "text"; text: string }
 	| { type: "thinking"; text: string }
 	| { type: "tool_call"; call: ToolCallInfo }
 	| { type: "tool_group"; calls: ToolCallInfo[] };
 
-function processParts(parts: MessagePart[]): ProcessedPart[] {
+export function processParts(parts: MessagePart[]): ProcessedPart[] {
 	// Step 1: Pair each tool_use with its following tool_result
 	const paired: Array<
 		| { type: "text"; text: string }
@@ -270,7 +421,12 @@ function processParts(parts: MessagePart[]): ProcessedPart[] {
 	const result: ProcessedPart[] = [];
 	for (const item of paired) {
 		const isToolCall = "toolName" in item;
-		const isProminent = isToolCall && (item.toolName === "Edit" || item.toolName === "Write");
+		const isProminent = isToolCall && (
+			item.toolName === "Edit" ||
+			item.toolName === "Write" ||
+			item.toolName === "TodoWrite" ||
+			item.toolName === "AskUserQuestion"
+		);
 
 		if (isToolCall && !isProminent) {
 			const last = result[result.length - 1];
@@ -298,7 +454,7 @@ function getToolLabel(call: ToolCallInfo): string {
 	return "";
 }
 
-function ToolGroupBlock({ calls }: { calls: ToolCallInfo[] }) {
+export function ToolGroupBlock({ calls }: { calls: ToolCallInfo[] }) {
 	const [open, setOpen] = useState(false);
 	const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
@@ -358,7 +514,7 @@ function ToolGroupBlock({ calls }: { calls: ToolCallInfo[] }) {
 	);
 }
 
-function CodeBlock({ children }: { children: React.ReactNode }) {
+export function CodeBlock({ children }: { children: React.ReactNode }) {
 	const [copied, setCopied] = useState(false);
 
 	const handleCopy = useCallback(() => {
@@ -396,7 +552,7 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
 	);
 }
 
-function MarkdownContent({ content }: { content: string }) {
+export function MarkdownContent({ content }: { content: string }) {
 	return (
 		<Markdown
 			remarkPlugins={[remarkGfm]}
@@ -490,7 +646,7 @@ function MarkdownContent({ content }: { content: string }) {
 	);
 }
 
-function groupMessages(messages: ChatMessage[]): ChatMessage[][] {
+export function groupMessages(messages: ChatMessage[]): ChatMessage[][] {
 	const groups: ChatMessage[][] = [];
 	for (const msg of messages) {
 		const lastGroup = groups[groups.length - 1];
@@ -503,7 +659,7 @@ function groupMessages(messages: ChatMessage[]): ChatMessage[][] {
 	return groups;
 }
 
-const MessageBubble = React.memo(function MessageBubble({ messages }: { messages: ChatMessage[] }) {
+export const MessageBubble = React.memo(function MessageBubble({ messages }: { messages: ChatMessage[] }) {
 	const isUser = messages[0].role === "user";
 	const allParts = messages.flatMap((m) => m.parts);
 	const isEmpty = allParts.length === 0 && !isUser;
@@ -545,7 +701,7 @@ const MessageBubble = React.memo(function MessageBubble({ messages }: { messages
 						case "thinking":
 							return <ThinkingBlock key={i} part={part} />;
 						case "tool_call":
-							return <ToolUseBlock key={i} part={{ type: "tool_use" as const, toolName: part.call.toolName, toolInput: part.call.toolInput }} />;
+							return <ToolUseBlock key={i} part={{ type: "tool_use" as const, toolName: part.call.toolName, toolInput: part.call.toolInput }} result={part.call.result} />;
 						case "tool_group":
 							return <ToolGroupBlock key={i} calls={part.calls} />;
 					}

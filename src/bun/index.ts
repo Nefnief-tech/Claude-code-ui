@@ -29,6 +29,7 @@ import {
 	syncSessions as mobileSyncSessions,
 	switchSession as mobileSwitchSession,
 	setMessages as mobileSetMessages,
+	notifyDesktopMessage,
 } from "./mobile-server";
 
 // HMR: use Vite dev server if running, otherwise use bundled views
@@ -75,6 +76,7 @@ const mainRPC = BrowserView.defineRPC<MainRPC>({
 			ping: () => "pong",
 			getGreeting: () => "Greetings from the Bun side!",
 			sendMessage: ({ text, apiKey, baseUri, cwd }) => {
+				notifyDesktopMessage(text);
 				startAgent(text, (chunk) => {
 					mainRPC.send.agentChunk(chunk);
 					relayChunkToMobile(chunk);
@@ -101,6 +103,8 @@ const mainRPC = BrowserView.defineRPC<MainRPC>({
 				try {
 					// Wire up mobile callbacks to use same agent start logic
 					setSendPromptCallback((text) => {
+						// Notify desktop to prepare for chunks from mobile
+						mainRPC.send.mobileUserMessage({ text });
 						const apiKey = process.env.ANTHROPIC_API_KEY;
 						const baseUri = process.env.ANTHROPIC_BASE_URL;
 						startAgent(text, (chunk) => {

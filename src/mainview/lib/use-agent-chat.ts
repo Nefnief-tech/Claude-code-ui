@@ -1,51 +1,10 @@
 import { electrobun } from "@/lib/electrobun";
-import type { AgentChunkPayload } from "shared/rpc";
+import type { AgentChunkPayload, ChatMessageRPC, MessagePartRPC } from "shared/rpc";
+import { appendTextToLastPart, appendThinking } from "shared/message-utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type MessagePart =
-	| { type: "text"; text: string }
-	| { type: "tool_use"; toolName: string; toolInput: string }
-	| { type: "tool_result"; toolUseId: string; output: string }
-	| { type: "thinking"; text: string };
-
-export type ChatMessage = {
-	id: string;
-	role: "user" | "assistant";
-	parts: MessagePart[];
-};
-
-function appendTextToLastPart(
-	parts: MessagePart[],
-	text: string,
-): MessagePart[] {
-	if (parts.length === 0) {
-		return [{ type: "text", text }];
-	}
-	const last = parts[parts.length - 1];
-	if (last.type === "text") {
-		return [
-			...parts.slice(0, -1),
-			{ type: "text", text: last.text + text },
-		];
-	}
-	return [...parts, { type: "text", text }];
-}
-
-function appendThinking(
-	parts: MessagePart[],
-	text: string,
-): MessagePart[] {
-	if (parts.length > 0) {
-		const last = parts[parts.length - 1];
-		if (last.type === "thinking") {
-			return [
-				...parts.slice(0, -1),
-				{ type: "thinking", text: last.text + text },
-			];
-		}
-	}
-	return [...parts, { type: "thinking", text }];
-}
+export type MessagePart = MessagePartRPC;
+export type ChatMessage = ChatMessageRPC;
 
 let nextId = 0;
 function uid(): string {
@@ -168,6 +127,22 @@ export function useAgentChat() {
 	useEffect(() => {
 		electrobun.rpc?.addMessageListener("agentChunk", handleChunk);
 	}, [handleChunk]);
+
+	// Handle messages initiated from mobile
+	useEffect(() => {
+		electrobun.rpc?.addMessageListener("mobileUserMessage", ({ text }) => {
+			if (isStreaming) return;
+			const userId = uid();
+			const assistantId = uid();
+			assistantIdRef.current = assistantId;
+			setMessages((prev) => [
+				...prev,
+				{ id: userId, role: "user", parts: [{ type: "text", text: `[Mobile] ${text}` }] },
+				{ id: assistantId, role: "assistant", parts: [] },
+			]);
+			setIsStreaming(true);
+		});
+	}, [isStreaming]);
 
 	// Load messages when switching sessions
 	const loadMessages = useCallback((msgs: ChatMessage[]) => {

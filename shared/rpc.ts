@@ -171,6 +171,7 @@ export type MainRPC = {
 		messages: {
 			agentChunk: AgentChunkPayload;
 			mobileSwitchRequest: { sessionId: string };
+			mobileUserMessage: { text: string };
 		};
 	}>;
 };
