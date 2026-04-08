@@ -756,7 +756,7 @@ body::after {
 
 .integration-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 20px;
 }
 
@@ -958,7 +958,7 @@ body::after {
     grid-template-columns: repeat(2, 1fr);
   }
   .integration-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
   }
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
