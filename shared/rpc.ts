@@ -46,6 +46,21 @@ export type GitLogEntry = {
 	date: string;
 };
 
+export type GitStashEntry = {
+	ref: string;
+	message: string;
+	branch: string;
+};
+
+export type GhPrEntry = {
+	number: number;
+	title: string;
+	author: string;
+	headBranch: string;
+	state: string;
+	url: string;
+};
+
 export type SkillSource = "user" | "agent" | "plugin";
 
 export type SkillInfo = {
@@ -116,6 +131,34 @@ export type MainRPC = {
 			gitLog: {
 				params: { cwd: string; count?: number };
 				response: GitLogEntry[];
+			};
+			gitStashList: {
+				params: { cwd: string };
+				response: GitStashEntry[];
+			};
+			gitStashPush: {
+				params: { cwd: string; message?: string };
+				response: { success: boolean; error?: string };
+			};
+			gitStashPop: {
+				params: { cwd: string; index?: number };
+				response: { success: boolean; error?: string };
+			};
+			gitStashDrop: {
+				params: { cwd: string; index: number };
+				response: { success: boolean; error?: string };
+			};
+			ghPrList: {
+				params: { cwd: string };
+				response: GhPrEntry[];
+			};
+			ghPrCreate: {
+				params: { cwd: string; title: string; body?: string; base?: string; draft?: boolean };
+				response: { success: boolean; url?: string; error?: string };
+			};
+			gitGenerateCommitMessage: {
+				params: { cwd: string; apiKey?: string; baseUri?: string };
+				response: { message?: string; error?: string };
 			};
 			skillsList: {
 				params: Record<string, never>;

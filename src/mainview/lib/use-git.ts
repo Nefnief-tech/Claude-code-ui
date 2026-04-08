@@ -1,14 +1,16 @@
 import { electrobun } from "@/lib/electrobun";
-import type { GitStatusRPC, GitLogEntry } from "shared/rpc";
+import type { GitStatusRPC, GitLogEntry, GitStashEntry, GhPrEntry } from "shared/rpc";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type { GitStatusRPC, GitLogEntry };
+export type { GitStatusRPC, GitLogEntry, GitStashEntry, GhPrEntry };
 
 export function useGit(cwd: string | undefined) {
 	const [status, setStatus] = useState<GitStatusRPC | null>(null);
 	const [diff, setDiff] = useState<string>("");
 	const [log, setLog] = useState<GitLogEntry[]>([]);
 	const [loading, setLoading] = useState(false);
+	const [stashList, setStashList] = useState<GitStashEntry[]>([]);
+	const [prList, setPrList] = useState<GhPrEntry[]>([]);
 	const intervalRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
 	const refresh = useCallback(async () => {
@@ -16,18 +18,24 @@ export function useGit(cwd: string | undefined) {
 			setStatus(null);
 			setDiff("");
 			setLog([]);
+			setStashList([]);
+			setPrList([]);
 			return;
 		}
 		setLoading(true);
 		try {
-			const [s, d, l] = await Promise.all([
+			const [s, d, l, st, pr] = await Promise.all([
 				electrobun.rpc?.request.gitStatus({ cwd }) ?? null,
 				electrobun.rpc?.request.gitDiff({ cwd, staged: false }) ?? "",
 				electrobun.rpc?.request.gitLog({ cwd, count: 20 }) ?? [],
+				electrobun.rpc?.request.gitStashList({ cwd }) ?? [],
+				electrobun.rpc?.request.ghPrList({ cwd }) ?? [],
 			]);
 			setStatus(s);
 			setDiff(d);
 			setLog(l);
+			setStashList(st);
+			setPrList(pr);
 		} catch {
 			// ignore
 		} finally {
@@ -104,10 +112,45 @@ export function useGit(cwd: string | undefined) {
 		);
 	}, [cwd]);
 
+	const stashPush = useCallback(async (message?: string) => {
+		if (!cwd) return { success: false, error: "No cwd" };
+		const result = await electrobun.rpc?.request.gitStashPush({ cwd, message });
+		await refresh();
+		return result ?? { success: false, error: "RPC failed" };
+	}, [cwd, refresh]);
+
+	const stashPop = useCallback(async (index?: number) => {
+		if (!cwd) return { success: false, error: "No cwd" };
+		const result = await electrobun.rpc?.request.gitStashPop({ cwd, index });
+		await refresh();
+		return result ?? { success: false, error: "RPC failed" };
+	}, [cwd, refresh]);
+
+	const stashDrop = useCallback(async (index: number) => {
+		if (!cwd) return { success: false, error: "No cwd" };
+		const result = await electrobun.rpc?.request.gitStashDrop({ cwd, index });
+		await refresh();
+		return result ?? { success: false, error: "RPC failed" };
+	}, [cwd, refresh]);
+
+	const prCreate = useCallback(async (title: string, body?: string, base?: string, draft?: boolean) => {
+		if (!cwd) return { success: false, error: "No cwd" };
+		const result = await electrobun.rpc?.request.ghPrCreate({ cwd, title, body, base, draft });
+		await refresh();
+		return result ?? { success: false, error: "RPC failed" };
+	}, [cwd, refresh]);
+
+	const generateCommitMsg = useCallback(async (apiKey?: string, baseUri?: string) => {
+		if (!cwd) return { error: "No cwd" };
+		return await electrobun.rpc?.request.gitGenerateCommitMessage({ cwd, apiKey, baseUri }) ?? { error: "RPC failed" };
+	}, [cwd]);
+
 	return {
 		status,
 		diff,
 		log,
+		stashList,
+		prList,
 		loading,
 		refresh,
 		stageAll,
@@ -116,5 +159,10 @@ export function useGit(cwd: string | undefined) {
 		push,
 		fetchRemote,
 		getStagedDiff,
+		stashPush,
+		stashPop,
+		stashDrop,
+		prCreate,
+		generateCommitMsg,
 	};
 }

@@ -3,7 +3,7 @@ import type { AgentChunkPayload } from "shared/rpc";
 
 let currentProc: ReturnType<typeof Bun.spawn> | null = null;
 
-function findClaudeBinary(): string {
+export function findClaudeBinary(): string {
 	const candidates = [
 		"/usr/local/bin/claude",
 		"/home/linuxbrew/.linuxbrew/bin/claude",
@@ -32,7 +32,7 @@ function findClaudeBinary(): string {
 	);
 }
 
-function buildCleanEnv(overrides?: { apiKey?: string; baseUri?: string }): Record<string, string | undefined> {
+export function buildCleanEnv(overrides?: { apiKey?: string; baseUri?: string }): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = { ...process.env };
 	// Strip all Claude-related env vars to avoid conflicts from parent process
 	delete env.CLAUDECODE;

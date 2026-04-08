@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { GitStatusRPC, GitLogEntry } from "@/lib/use-git";
+import type { GitStatusRPC, GitLogEntry, GitStashEntry, GhPrEntry } from "@/lib/use-git";
 import { useState } from "react";
 
 function DiffBadge({ status }: { status: GitStatusRPC }) {
@@ -109,37 +109,310 @@ function LogView({ log }: { log: GitLogEntry[] }) {
 	);
 }
 
+function StashView({
+	stashList,
+	onPop,
+	onDrop,
+	onStash,
+	loading,
+}: {
+	stashList: GitStashEntry[];
+	onPop: (index?: number) => void;
+	onDrop: (index: number) => void;
+	onStash: (message?: string) => void;
+	loading: boolean;
+}) {
+	const [stashMsg, setStashMsg] = useState("");
+
+	if (stashList.length === 0 && !loading) {
+		return (
+			<div>
+				<div className="mb-3">
+					<p className="py-4 text-center text-xs text-muted-foreground">
+						No stashes
+					</p>
+				</div>
+				<div className="flex gap-2">
+					<Input
+						value={stashMsg}
+						onChange={(e) => setStashMsg(e.target.value)}
+						placeholder="Stash message (optional)"
+						className="flex-1 rounded-lg text-xs"
+						disabled={loading}
+					/>
+					<Button
+						type="button"
+						onClick={() => { onStash(stashMsg || undefined); setStashMsg(""); }}
+						disabled={loading}
+						className="rounded-lg px-3 text-xs"
+						size="sm"
+					>
+						Stash
+					</Button>
+				</div>
+			</div>
+		);
+	}
+
+	return (
+		<div>
+			<div className="space-y-1 mb-3">
+				{stashList.map((entry, i) => (
+					<div
+						key={entry.ref}
+						className="flex items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent/30"
+					>
+						<span className="shrink-0 font-mono text-muted-foreground">
+							{"stash@{" + i + "}"}
+						</span>
+						<div className="flex-1 min-w-0">
+							<p className="truncate">{entry.message}</p>
+							{entry.branch && (
+								<p className="text-muted-foreground text-[10px]">{entry.branch}</p>
+							)}
+						</div>
+						<div className="flex shrink-0 gap-1">
+							<button
+								type="button"
+								onClick={() => onPop(i)}
+								disabled={loading}
+								className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-40"
+							>
+								Pop
+							</button>
+							<button
+								type="button"
+								onClick={() => onDrop(i)}
+								disabled={loading}
+								className="rounded px-1.5 py-0.5 text-[10px] text-red-500 hover:bg-destructive/10 transition-colors disabled:opacity-40"
+							>
+								Drop
+							</button>
+						</div>
+					</div>
+				))}
+			</div>
+			<div className="flex gap-2">
+				<Input
+					value={stashMsg}
+					onChange={(e) => setStashMsg(e.target.value)}
+					placeholder="Stash message (optional)"
+					className="flex-1 rounded-lg text-xs"
+					disabled={loading}
+				/>
+				<Button
+					type="button"
+					onClick={() => { onStash(stashMsg || undefined); setStashMsg(""); }}
+					disabled={loading}
+					className="rounded-lg px-3 text-xs"
+					size="sm"
+				>
+					Stash
+				</Button>
+			</div>
+		</div>
+	);
+}
+
+function PrView({
+	prList,
+	onCreatePr,
+	lastCommitMsg,
+	loading,
+}: {
+	prList: GhPrEntry[];
+	onCreatePr: (title: string, body?: string, base?: string, draft?: boolean) => Promise<{ success: boolean; url?: string; error?: string }>;
+	lastCommitMsg: string;
+	loading: boolean;
+}) {
+	const [showForm, setShowForm] = useState(false);
+	const [title, setTitle] = useState("");
+	const [body, setBody] = useState("");
+	const [baseBranch, setBaseBranch] = useState("");
+	const [isDraft, setIsDraft] = useState(false);
+	const [submitting, setSubmitting] = useState(false);
+	const [result, setResult] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
+
+	const handleOpenForm = () => {
+		setTitle(lastCommitMsg);
+		setBody("");
+		setBaseBranch("");
+		setIsDraft(false);
+		setShowForm(true);
+		setResult(null);
+	};
+
+	const handleSubmit = async () => {
+		if (!title.trim()) return;
+		setSubmitting(true);
+		const res = await onCreatePr(title.trim(), body || undefined, baseBranch || undefined, isDraft);
+		setSubmitting(false);
+		if (res.success && res.url) {
+			setResult({ type: "ok", msg: `PR created: ${res.url}` });
+			setShowForm(false);
+		} else {
+			setResult({ type: "err", msg: res.error ?? "Failed to create PR" });
+		}
+	};
+
+	return (
+		<div>
+			{result && (
+				<div
+					className={`mb-2 rounded-lg px-3 py-1.5 text-xs ${
+						result.type === "ok"
+							? "bg-green-500/10 text-green-600 dark:text-green-400"
+							: "bg-destructive/10 text-destructive"
+					}`}
+				>
+					{result.type === "ok" && result.msg.includes("http") ? (
+						<a href={result.msg.replace("PR created: ", "")} target="_blank" rel="noopener noreferrer" className="underline">
+							{result.msg}
+						</a>
+					) : result.msg}
+				</div>
+			)}
+
+			{prList.length > 0 ? (
+				<div className="space-y-1 mb-3">
+					{prList.map((pr) => (
+						<button
+							key={pr.number}
+							type="button"
+							onClick={() => window.open(pr.url, "_blank")}
+							className="w-full text-left flex items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent/30 transition-colors"
+						>
+							<span className="shrink-0 font-mono text-primary">#{pr.number}</span>
+							<span className="flex-1 truncate">{pr.title}</span>
+							<span className="shrink-0 text-muted-foreground">{pr.author}</span>
+						</button>
+					))}
+				</div>
+			) : (
+				!showForm && (
+					<p className="py-4 text-center text-xs text-muted-foreground">
+						No open PRs
+					</p>
+				)
+			)}
+
+			{showForm ? (
+				<div className="space-y-2">
+					<Input
+						value={title}
+						onChange={(e) => setTitle(e.target.value)}
+						placeholder="PR title"
+						className="rounded-lg text-xs"
+						disabled={submitting}
+					/>
+					<textarea
+						value={body}
+						onChange={(e) => setBody(e.target.value)}
+						placeholder="Description (optional)"
+						className="w-full rounded-lg border border-border/60 bg-background/50 px-3 py-2 text-xs resize-none h-20 focus:outline-none focus:ring-1 focus:ring-primary"
+						disabled={submitting}
+					/>
+					<Input
+						value={baseBranch}
+						onChange={(e) => setBaseBranch(e.target.value)}
+						placeholder="Base branch (optional)"
+						className="rounded-lg text-xs"
+						disabled={submitting}
+					/>
+					<div className="flex items-center gap-2">
+						<label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+							<input
+								type="checkbox"
+								checked={isDraft}
+								onChange={(e) => setIsDraft(e.target.checked)}
+								className="rounded"
+								disabled={submitting}
+							/>
+							Draft
+						</label>
+						<div className="flex-1" />
+						<Button
+							type="button"
+							variant="outline"
+							onClick={() => setShowForm(false)}
+							disabled={submitting}
+							className="rounded-lg px-3 text-xs"
+							size="sm"
+						>
+							Cancel
+						</Button>
+						<Button
+							type="button"
+							onClick={handleSubmit}
+							disabled={!title.trim() || submitting}
+							className="rounded-lg px-3 text-xs"
+							size="sm"
+						>
+							{submitting ? "Creating..." : "Create PR"}
+						</Button>
+					</div>
+				</div>
+			) : (
+				<Button
+					type="button"
+					onClick={handleOpenForm}
+					disabled={loading}
+					className="w-full rounded-lg text-xs"
+					size="sm"
+				>
+					Create PR
+				</Button>
+			)}
+		</div>
+	);
+}
+
 export function GitPanel({
 	status,
 	diff,
 	log,
+	stashList,
+	prList,
 	loading,
 	onStageAll,
 	onCommit,
 	onPush,
 	onFetch,
 	onRefresh,
+	onStashPush,
+	onStashPop,
+	onStashDrop,
+	onPrCreate,
+	onGenerateCommitMessage,
 	gitUser,
 	gitToken,
 }: {
 	status: GitStatusRPC | null;
 	diff: string;
 	log: GitLogEntry[];
+	stashList: GitStashEntry[];
+	prList: GhPrEntry[];
 	loading: boolean;
 	onStageAll: () => void;
 	onCommit: (msg: string) => void;
 	onPush: () => void;
 	onFetch: () => void;
 	onRefresh: () => void;
+	onStashPush: (message?: string) => void;
+	onStashPop: (index?: number) => void;
+	onStashDrop: (index: number) => void;
+	onPrCreate: (title: string, body?: string, base?: string, draft?: boolean) => Promise<{ success: boolean; url?: string; error?: string }>;
+	onGenerateCommitMessage: () => Promise<{ message?: string; error?: string }>;
 	gitUser?: string;
 	gitToken?: string;
 }) {
 	const [commitMsg, setCommitMsg] = useState("");
-	const [tab, setTab] = useState<"changes" | "log">("changes");
+	const [tab, setTab] = useState<"changes" | "log" | "stash" | "prs">("changes");
 	const [feedback, setFeedback] = useState<{
 		type: "ok" | "err";
 		msg: string;
 	} | null>(null);
+	const [generatingMsg, setGeneratingMsg] = useState(false);
 
 	if (!status) {
 		return (
@@ -162,10 +435,24 @@ export function GitPanel({
 		setCommitMsg("");
 	};
 
+	const handleGenerateMsg = async () => {
+		setGeneratingMsg(true);
+		const result = await onGenerateCommitMessage();
+		setGeneratingMsg(false);
+		if (result.message) {
+			setCommitMsg(result.message);
+		} else if (result.error) {
+			setFeedback({ type: "err", msg: result.error });
+			setTimeout(() => setFeedback(null), 3000);
+		}
+	};
+
 	const hasChanges =
 		status.staged > 0 ||
 		status.unstaged > 0 ||
 		status.untracked > 0;
+
+	const lastCommitMsg = log.length > 0 ? log[0].message : "";
 
 	return (
 		<div className="flex h-full flex-col">
@@ -258,6 +545,38 @@ export function GitPanel({
 				>
 					Log
 				</button>
+				<button
+					type="button"
+					onClick={() => setTab("stash")}
+					className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+						tab === "stash"
+							? "border-b-2 border-primary text-foreground"
+							: "text-muted-foreground hover:text-foreground"
+					}`}
+				>
+					Stash
+					{stashList.length > 0 && (
+						<span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary/20 px-1 text-[10px]">
+							{stashList.length}
+						</span>
+					)}
+				</button>
+				<button
+					type="button"
+					onClick={() => setTab("prs")}
+					className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+						tab === "prs"
+							? "border-b-2 border-primary text-foreground"
+							: "text-muted-foreground hover:text-foreground"
+					}`}
+				>
+					PRs
+					{prList.length > 0 && (
+						<span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary/20 px-1 text-[10px]">
+							{prList.length}
+						</span>
+					)}
+				</button>
 			</div>
 
 			{/* Content */}
@@ -308,8 +627,23 @@ export function GitPanel({
 						)}
 						<DiffView diff={diff} />
 					</>
-				) : (
+				) : tab === "log" ? (
 					<LogView log={log} />
+				) : tab === "stash" ? (
+					<StashView
+						stashList={stashList}
+						onPop={onStashPop}
+						onDrop={onStashDrop}
+						onStash={onStashPush}
+						loading={loading}
+					/>
+				) : (
+					<PrView
+						prList={prList}
+						onCreatePr={onPrCreate}
+						lastCommitMsg={lastCommitMsg}
+						loading={loading}
+					/>
 				)}
 			</div>
 
@@ -342,6 +676,44 @@ export function GitPanel({
 						className="flex-1 rounded-lg text-xs"
 						disabled={loading}
 					/>
+					<button
+						type="button"
+						onClick={handleGenerateMsg}
+						disabled={generatingMsg || loading}
+						className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-40"
+						title="Generate commit message with AI"
+					>
+						{generatingMsg ? (
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								className="animate-spin"
+							>
+								<path d="M21 12a9 9 0 1 1-6.219-8.56" />
+							</svg>
+						) : (
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							>
+								<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
+							</svg>
+						)}
+					</button>
 					<Button
 						type="submit"
 						disabled={!commitMsg.trim() || status.staged === 0 || loading}

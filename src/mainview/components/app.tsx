@@ -82,12 +82,19 @@ export function App() {
 		status: gitStatus,
 		diff: gitDiff,
 		log: gitLog,
+		stashList: gitStashList,
+		prList: gitPrList,
 		loading: gitLoading,
 		refresh: gitRefresh,
 		stageAll: gitStageAll,
 		commit: gitCommit,
 		push: gitPush,
 		fetchRemote: gitFetch,
+		stashPush: gitStashPush,
+		stashPop: gitStashPop,
+		stashDrop: gitStashDrop,
+		prCreate: gitPrCreate,
+		generateCommitMsg: gitGenerateCommitMsg,
 	} = useGit(activeProject?.path || undefined);
 
 	const {
@@ -401,6 +408,26 @@ export function App() {
 		await gitPush(gitToken || undefined, gitUser || undefined);
 	}, [gitPush, gitToken, gitUser]);
 
+	const handleStashPush = useCallback(async (message?: string) => {
+		await gitStashPush(message);
+	}, [gitStashPush]);
+
+	const handleStashPop = useCallback(async (index?: number) => {
+		await gitStashPop(index);
+	}, [gitStashPop]);
+
+	const handleStashDrop = useCallback(async (index: number) => {
+		await gitStashDrop(index);
+	}, [gitStashDrop]);
+
+	const handlePrCreate = useCallback(async (title: string, body?: string, base?: string, draft?: boolean) => {
+		return await gitPrCreate(title, body, base, draft);
+	}, [gitPrCreate]);
+
+	const handleGenerateCommitMessage = useCallback(async () => {
+		return await gitGenerateCommitMsg(apiKey || undefined, baseUri || undefined);
+	}, [gitGenerateCommitMsg, apiKey, baseUri]);
+
 	const handleMobileToggle = useCallback(async (enabled: boolean) => {
 		if (enabled) {
 			const res = await electrobun.rpc?.request.mobileStart({ port: mobilePort });
@@ -567,12 +594,19 @@ export function App() {
 							status={gitStatus}
 							diff={gitDiff}
 							log={gitLog}
+							stashList={gitStashList}
+							prList={gitPrList}
 							loading={gitLoading}
 							onStageAll={gitStageAll}
 							onCommit={handleGitCommit}
 							onPush={handleGitPush}
 							onFetch={gitFetch}
 							onRefresh={gitRefresh}
+							onStashPush={handleStashPush}
+							onStashPop={handleStashPop}
+							onStashDrop={handleStashDrop}
+							onPrCreate={handlePrCreate}
+							onGenerateCommitMessage={handleGenerateCommitMessage}
 							gitUser={gitUser}
 							gitToken={gitToken}
 						/>

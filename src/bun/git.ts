@@ -260,3 +260,203 @@ export function gitLog(
 		return { hash: hash ?? "", message: message ?? "", author: author ?? "", date: date ?? "" };
 	});
 }
+
+// --- Stash management ---
+
+export function gitStashList(cwd: string): { ref: string; message: string; branch: string }[] {
+	const raw = runGit("stash list", cwd);
+	if (!raw) return [];
+	return raw.split("\n").filter(Boolean).map((line) => {
+		// Format: stash@{0}: On branch-name: stash message
+		// or: stash@{0}: WIP on branch-name: abc1234 commit msg
+		const match = line.match(/^(stash@\{\d+\}):\s+(?:On |WIP on )([^:]+):\s+(.*)/);
+		if (match) {
+			return { ref: match[1], branch: match[2].trim(), message: match[3].trim() };
+		}
+		// Fallback: just return raw line
+		const colonIdx = line.indexOf(":");
+		return { ref: line.slice(0, colonIdx), branch: "", message: line.slice(colonIdx + 1).trim() };
+	});
+}
+
+export function gitStashPush(cwd: string, message?: string): { success: boolean; error?: string } {
+	try {
+		const msgArg = message ? ` -m ${JSON.stringify(message)}` : "";
+		execSync(`git stash push${msgArg}`, { cwd, encoding: "utf-8", timeout: 10000 });
+		return { success: true };
+	} catch (err: unknown) {
+		return {
+			success: false,
+			error: err instanceof Error
+				? (err as Error & { stderr?: string }).stderr?.trim() || err.message
+				: String(err),
+		};
+	}
+}
+
+export function gitStashPop(cwd: string, index?: number): { success: boolean; error?: string } {
+	try {
+		const ref = index !== undefined ? ` stash@{${index}}` : "";
+		execSync(`git stash pop${ref}`, { cwd, encoding: "utf-8", timeout: 10000 });
+		return { success: true };
+	} catch (err: unknown) {
+		return {
+			success: false,
+			error: err instanceof Error
+				? (err as Error & { stderr?: string }).stderr?.trim() || err.message
+				: String(err),
+		};
+	}
+}
+
+export function gitStashDrop(cwd: string, index: number): { success: boolean; error?: string } {
+	try {
+		execSync(`git stash drop stash@{${index}}`, { cwd, encoding: "utf-8", timeout: 10000 });
+		return { success: true };
+	} catch (err: unknown) {
+		return {
+			success: false,
+			error: err instanceof Error
+				? (err as Error & { stderr?: string }).stderr?.trim() || err.message
+				: String(err),
+		};
+	}
+}
+
+// --- GitHub PR integration (gh CLI) ---
+
+function runGh(args: string, cwd: string): string | null {
+	try {
+		return execSync(`gh ${args}`, {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+			timeout: 15000,
+		}).trim();
+	} catch {
+		return null;
+	}
+}
+
+export function ghPrList(cwd: string): { number: number; title: string; author: string; headBranch: string; state: string; url: string }[] {
+	const raw = runGh("pr list --json number,title,author,headRefName,state,url", cwd);
+	if (!raw) return [];
+	try {
+		const parsed = JSON.parse(raw) as Array<{
+			number: number;
+			title: string;
+			author: { login: string } | null;
+			headRefName: string;
+			state: string;
+			url: string;
+		}>;
+		return parsed.map((pr) => ({
+			number: pr.number,
+			title: pr.title,
+			author: pr.author?.login ?? "unknown",
+			headBranch: pr.headRefName,
+			state: pr.state,
+			url: pr.url,
+		}));
+	} catch {
+		return [];
+	}
+}
+
+export function ghPrCreate(
+	cwd: string,
+	title: string,
+	body?: string,
+	base?: string,
+	draft?: boolean,
+): { success: boolean; url?: string; error?: string } {
+	try {
+		let cmd = `gh pr create --title ${JSON.stringify(title)}`;
+		if (body) cmd += ` --body ${JSON.stringify(body)}`;
+		else cmd += ` --body ""`;
+		if (base) cmd += ` --base ${JSON.stringify(base)}`;
+		if (draft) cmd += " --draft";
+		const result = execSync(cmd, { cwd, encoding: "utf-8", timeout: 15000 }).trim();
+		// gh outputs the PR URL
+		const urlMatch = result.match(/https:\/\/\S+/);
+		return { success: true, url: urlMatch?.[0] ?? result };
+	} catch (err: unknown) {
+		return {
+			success: false,
+			error: err instanceof Error
+				? (err as Error & { stderr?: string }).stderr?.trim() || err.message
+				: String(err),
+		};
+	}
+}
+
+// --- AI commit message generation ---
+
+export async function generateCommitMessage(
+	cwd: string,
+	apiKey?: string,
+	baseUri?: string,
+): Promise<{ message?: string; error?: string }> {
+	// Get staged diff
+	let diff = runGit("diff --cached", cwd) ?? "";
+
+	// If no staged diff, also include unstaged as context
+	if (!diff) {
+		diff = runGit("diff", cwd) ?? "";
+	}
+
+	if (!diff) {
+		return { error: "No changes to generate a commit message from" };
+	}
+
+	// Truncate diff to avoid oversized requests
+	const maxDiffLen = 50000;
+	const truncated = diff.length > maxDiffLen ? diff.slice(0, maxDiffLen) + "\n... (truncated)" : diff;
+
+	const key = apiKey || process.env.ANTHROPIC_API_KEY;
+	if (!key) {
+		return { error: "No API key configured" };
+	}
+
+	const baseUrl = (baseUri || process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/$/, "");
+
+	try {
+		const res = await fetch(`${baseUrl}/v1/messages`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-api-key": key,
+				"anthropic-version": "2023-06-01",
+			},
+			body: JSON.stringify({
+				model: "claude-haiku-4-5-20251001",
+				max_tokens: 256,
+				messages: [
+					{
+						role: "user",
+						content: `Generate a concise, conventional commit message (max 72 chars subject, optional body) for these changes. Output ONLY the commit message text, nothing else.\n\n${truncated}`,
+					},
+				],
+			}),
+		});
+
+		if (!res.ok) {
+			const body = await res.text().catch(() => "");
+			return { error: `API error ${res.status}: ${body.slice(0, 200)}` };
+		}
+
+		const data = (await res.json()) as {
+			content: Array<{ type: string; text?: string }>;
+		};
+		const text = data.content?.find((b) => b.type === "text")?.text?.trim();
+		if (!text) {
+			return { error: "Empty response from API" };
+		}
+
+		return { message: text };
+	} catch (err: unknown) {
+		return {
+			error: err instanceof Error ? err.message : String(err),
+		};
+	}
+}
