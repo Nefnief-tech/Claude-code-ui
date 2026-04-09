@@ -846,6 +846,12 @@ export const ChatView = React.forwardRef(function ChatView({
 		clearSkill();
 	};
 
+	const handleAnswer = useCallback((answer: string) => {
+		if (isStreaming) abort();
+		// Use setTimeout to let abort state settle before sending
+		setTimeout(() => sendMessage(answer), 50);
+	}, [isStreaming, abort, sendMessage]);
+
 	return (
 		<div className="flex h-full flex-col overflow-hidden bg-background">
 			<ScrollArea ref={scrollRef} className="flex-1 overflow-hidden">
@@ -879,7 +885,7 @@ export const ChatView = React.forwardRef(function ChatView({
 				) : (
 					<div className="mx-auto max-w-3xl space-y-4 p-6">
 						{groupMessages(messages).map((group) => (
-							<MessageBubble key={group[0].id} messages={group} onAnswer={sendMessage} />
+							<MessageBubble key={group[0].id} messages={group} onAnswer={handleAnswer} />
 						))}
 					</div>
 				)}
