@@ -21,11 +21,11 @@ const clients = new Set<any>();
 let mobileDir = "";
 
 // Callbacks — set by index.ts
-let sendPromptCallback: ((text: string) => void) | null = null;
+let sendPromptCallback: ((text: string, doContinue?: boolean) => void) | null = null;
 let abortCallback: (() => void) | null = null;
 let switchSessionCallback: ((sessionId: string) => void) | null = null;
 
-export function setSendPromptCallback(cb: (text: string) => void) {
+export function setSendPromptCallback(cb: (text: string, doContinue?: boolean) => void) {
 	sendPromptCallback = cb;
 }
 

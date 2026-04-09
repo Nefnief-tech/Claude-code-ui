@@ -19,6 +19,7 @@ export function useAgentChat() {
 	const assistantIdRef = useRef<string | null>(null);
 	const activeSessionIdRef = useRef<string | null>(null);
 	const credentialsRef = useRef<{ apiKey?: string; baseUri?: string }>({});
+	const hasConversationRef = useRef(false);
 
 	// Track which session we're currently viewing
 	const setActiveSession = useCallback((id: string | null) => {
@@ -128,10 +129,12 @@ export function useAgentChat() {
 		electrobun.rpc?.addMessageListener("agentChunk", handleChunk);
 	}, [handleChunk]);
 
-	// Handle messages initiated from mobile
+	// Handle messages initiated from mobile (register once, check streaming state via ref)
+	const isStreamingRef = useRef(isStreaming);
+	isStreamingRef.current = isStreaming;
 	useEffect(() => {
 		electrobun.rpc?.addMessageListener("mobileUserMessage", ({ text }) => {
-			if (isStreaming) return;
+			if (isStreamingRef.current) return;
 			const userId = uid();
 			const assistantId = uid();
 			assistantIdRef.current = assistantId;
@@ -142,23 +145,24 @@ export function useAgentChat() {
 			]);
 			setIsStreaming(true);
 		});
-	}, [isStreaming]);
+	}, []);
 
 	// Load messages when switching sessions
 	const loadMessages = useCallback((msgs: ChatMessage[]) => {
 		setMessages(msgs);
 		setSessionCost(0);
+		hasConversationRef.current = msgs.length > 0;
 	}, []);
 
 	const sendMessage = useCallback(
-		(text: string, cwd?: string, skillContent?: string) => {
+		(text: string, cwd?: string, skillContent?: string, skillName?: string) => {
 			if (!text.trim() || isStreaming) return;
 
 			const userId = uid();
 			const assistantId = uid();
 			assistantIdRef.current = assistantId;
 
-			const displayText = text;
+			const displayText = skillName ? `/${skillName}\n\n${text}` : text;
 			const agentText = skillContent
 				? `${skillContent}\n\n---\n\n${text}`
 				: text;
@@ -170,10 +174,14 @@ export function useAgentChat() {
 			]);
 			setIsStreaming(true);
 
+			const doContinue = hasConversationRef.current;
+			hasConversationRef.current = true;
+
 			electrobun.rpc?.request.sendMessage({
 				text: agentText,
 				...credentialsRef.current,
 				cwd,
+				continue: doContinue,
 			}).catch((err) => {
 				setMessages((prev) =>
 					prev.map((m) =>

@@ -1,5 +1,4 @@
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, MessagePart } from "@/lib/use-agent-chat";
@@ -70,7 +69,7 @@ export function TodoListBlock({ input }: { input: string }) {
 
 // --- AskUserQuestion rendering ---
 
-export function AskQuestionBlock({ input, result }: { input: string; result?: string }) {
+export function AskQuestionBlock({ input, result, onAnswer }: { input: string; result?: string; onAnswer?: (answer: string) => void }) {
 	let parsed: { questions?: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; multiSelect?: boolean }> } | null = null;
 	try { parsed = JSON.parse(input); } catch { /* not JSON */ }
 	const questions = parsed?.questions || [];
@@ -120,14 +119,19 @@ export function AskQuestionBlock({ input, result }: { input: string; result?: st
 										const isChosen = chosenAnswer === opt.label
 											|| (typeof chosenAnswer === "string" && chosenAnswer.toLowerCase().includes(opt.label.toLowerCase()))
 											|| (result && !chosenAnswer && result.trim().toLowerCase() === opt.label.toLowerCase());
+										const interactive = !!onAnswer;
 										return (
 											<div
 												key={oi}
-												className="rounded-md border px-2.5 py-1.5 text-xs transition-colors"
+												onClick={interactive ? () => onAnswer!(opt.label) : undefined}
+												className={cn(
+													"rounded-md border px-2.5 py-1.5 text-xs transition-colors",
+													interactive && "cursor-pointer hover:border-primary/60 hover:bg-primary/5",
+												)}
 												style={{
 													borderColor: isChosen ? "var(--primary)" : "var(--border)",
 													backgroundColor: isChosen ? "color-mix(in oklch, var(--primary) 15%, transparent)" : "var(--background)",
-													opacity: isChosen ? 1 : 0.6,
+													opacity: isChosen ? 1 : 0.85,
 												}}
 											>
 												<div className="flex items-center gap-1.5">
@@ -154,7 +158,7 @@ export function AskQuestionBlock({ input, result }: { input: string; result?: st
 	);
 }
 
-export function ToolUseBlock({ part, result }: { part: Extract<MessagePart, { type: "tool_use" }>; result?: string }) {
+export function ToolUseBlock({ part, result, onAnswer }: { part: Extract<MessagePart, { type: "tool_use" }>; result?: string; onAnswer?: (answer: string) => void }) {
 	const [open, setOpen] = useState(part.toolName === "Edit" || part.toolName === "Write");
 
 	// Route TodoWrite to custom renderer
@@ -164,7 +168,7 @@ export function ToolUseBlock({ part, result }: { part: Extract<MessagePart, { ty
 
 	// Route AskUserQuestion to custom renderer
 	if (part.toolName === "AskUserQuestion") {
-		return <AskQuestionBlock input={part.toolInput} result={result} />;
+		return <AskQuestionBlock input={part.toolInput} result={result} onAnswer={onAnswer} />;
 	}
 
 	let parsed: Record<string, unknown> | null = null;
@@ -659,7 +663,7 @@ export function groupMessages(messages: ChatMessage[]): ChatMessage[][] {
 	return groups;
 }
 
-export const MessageBubble = React.memo(function MessageBubble({ messages }: { messages: ChatMessage[] }) {
+export const MessageBubble = React.memo(function MessageBubble({ messages, onAnswer }: { messages: ChatMessage[]; onAnswer?: (answer: string) => void }) {
 	const isUser = messages[0].role === "user";
 	const allParts = messages.flatMap((m) => m.parts);
 	const isEmpty = allParts.length === 0 && !isUser;
@@ -690,7 +694,7 @@ export const MessageBubble = React.memo(function MessageBubble({ messages }: { m
 						);
 					}
 					return null;
-				}) : processed!.map((part, i) => {
+				}) : (processed ?? []).map((part, i) => {
 					switch (part.type) {
 						case "text":
 							return (
@@ -701,7 +705,7 @@ export const MessageBubble = React.memo(function MessageBubble({ messages }: { m
 						case "thinking":
 							return <ThinkingBlock key={i} part={part} />;
 						case "tool_call":
-							return <ToolUseBlock key={i} part={{ type: "tool_use" as const, toolName: part.call.toolName, toolInput: part.call.toolInput }} result={part.call.result} />;
+							return <ToolUseBlock key={i} part={{ type: "tool_use" as const, toolName: part.call.toolName, toolInput: part.call.toolInput }} result={part.call.result} onAnswer={onAnswer} />;
 						case "tool_group":
 							return <ToolGroupBlock key={i} calls={part.calls} />;
 					}
@@ -726,7 +730,7 @@ export const ChatView = React.forwardRef(function ChatView({
 }: {
 	messages: ChatMessage[];
 	isStreaming: boolean;
-	sendMessage: (text: string, cwd?: string, skillContent?: string) => void;
+	sendMessage: (text: string, cwd?: string, skillContent?: string, skillName?: string) => void;
 	abort: () => void;
 	showGitPanel?: boolean;
 	onToggleGitPanel?: () => void;
@@ -742,13 +746,20 @@ export const ChatView = React.forwardRef(function ChatView({
 	const [pickerIndex, setPickerIndex] = useState(0);
 	const [pickerSkills, setPickerSkills] = useState<SkillInfo[]>([]);
 	const scrollRef = useRef<HTMLDivElement>(null);
-	const inputRef = useRef<HTMLInputElement>(null);
+	const inputRef = useRef<HTMLTextAreaElement>(null);
 
 	useImperativeHandle(ref, () => ({
 		focusInput: () => inputRef.current?.focus(),
 	}), []);
 
 	const getInputValue = useCallback(() => inputRef.current?.value ?? "", []);
+
+	const resizeTextarea = useCallback(() => {
+		const el = inputRef.current;
+		if (!el) return;
+		el.style.height = "auto";
+		el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+	}, []);
 
 	const scrollToBottom = useCallback(() => {
 		if (scrollRef.current) {
@@ -794,8 +805,9 @@ export const ChatView = React.forwardRef(function ChatView({
 		setSkillContent("");
 	}, []);
 
-	const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+	const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
 		updatePicker(e.target.value);
+		resizeTextarea();
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -809,10 +821,16 @@ export const ChatView = React.forwardRef(function ChatView({
 			} else if (e.key === "Enter" || e.key === "Tab") {
 				e.preventDefault();
 				selectSkill(pickerSkills[pickerIndex]);
+				return;
 			} else if (e.key === "Escape") {
 				e.preventDefault();
 				setShowPicker(false);
 			}
+		}
+		// Enter submits, Shift+Enter inserts newline
+		if (e.key === "Enter" && !e.shiftKey) {
+			e.preventDefault();
+			handleSubmit(e);
 		}
 	};
 
@@ -820,8 +838,11 @@ export const ChatView = React.forwardRef(function ChatView({
 		e.preventDefault();
 		const value = getInputValue();
 		if (!value.trim()) return;
-		sendMessage(value.trim(), undefined, skillContent || undefined);
-		if (inputRef.current) inputRef.current.value = "";
+		sendMessage(value.trim(), undefined, skillContent || undefined, activeSkill?.name);
+		if (inputRef.current) {
+			inputRef.current.value = "";
+			inputRef.current.style.height = "auto";
+		}
 		clearSkill();
 	};
 
@@ -858,7 +879,7 @@ export const ChatView = React.forwardRef(function ChatView({
 				) : (
 					<div className="mx-auto max-w-3xl space-y-4 p-6">
 						{groupMessages(messages).map((group) => (
-							<MessageBubble key={group[0].id} messages={group} />
+							<MessageBubble key={group[0].id} messages={group} onAnswer={sendMessage} />
 						))}
 					</div>
 				)}
@@ -950,7 +971,7 @@ export const ChatView = React.forwardRef(function ChatView({
 								</button>
 							</span>
 						)}
-						<Input
+						<textarea
 							ref={inputRef}
 							defaultValue=""
 							onChange={handleInputChange}
@@ -965,7 +986,8 @@ export const ChatView = React.forwardRef(function ChatView({
 											: "Message Claude..."
 							}
 							disabled={isStreaming}
-							className="flex-1 rounded-xl border-border/60 bg-secondary/30 px-4 py-2.5 text-sm placeholder:text-muted-foreground/60 focus-visible:bg-secondary/50"
+							rows={1}
+							className="flex-1 resize-none overflow-hidden rounded-xl border border-border/60 bg-secondary/30 px-4 py-2.5 text-sm placeholder:text-muted-foreground/60 focus-visible:bg-secondary/50 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 outline-none transition-[color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50"
 						/>
 						{isStreaming ? (
 							<Button

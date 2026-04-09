@@ -93,7 +93,7 @@ export type MainRPC = {
 				response: string;
 			};
 			sendMessage: {
-				params: { text: string; apiKey?: string; baseUri?: string; cwd?: string };
+				params: { text: string; apiKey?: string; baseUri?: string; cwd?: string; continue?: boolean };
 				response: { status: string };
 			};
 			abortAgent: {

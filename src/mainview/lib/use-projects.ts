@@ -35,7 +35,13 @@ function loadProjects(): Project[] {
 }
 
 function persistProjects(projects: Project[]) {
-	localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+	try {
+		localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+	} catch {
+		// localStorage quota exceeded — silently skip persist
+		// The data is still in memory; only persistence fails
+		console.warn("[projects] Failed to persist: storage quota exceeded");
+	}
 }
 
 function migrateOldSessions(): Project[] {

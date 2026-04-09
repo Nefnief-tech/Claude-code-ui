@@ -1,4 +1,5 @@
 import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import type { AgentChunkPayload } from "shared/rpc";
 
 let currentProc: ReturnType<typeof Bun.spawn> | null = null;
@@ -59,20 +60,24 @@ export function startAgent(
 	prompt: string,
 	onChunk: (chunk: AgentChunkPayload) => void,
 	envOverrides?: { apiKey?: string; baseUri?: string; cwd?: string },
+	continueConversation?: boolean,
 ): void {
 	const env = buildCleanEnv(envOverrides);
 	const cwd = envOverrides?.cwd && existsSync(envOverrides.cwd)
 		? envOverrides.cwd
-		: undefined;
+		: homedir();
 
 	console.log("[agent] API key set:", !!env.ANTHROPIC_API_KEY, "| Base URL:", env.ANTHROPIC_BASE_URL || "(default)");
-	console.log("[agent] Spawning claude --output-format stream-json, cwd:", cwd || "(none)");
+	console.log("[agent] cwd:", cwd, "| continue:", !!continueConversation);
 
 	const args = [
-		"--print", prompt,
+		"--print",
+		...(continueConversation ? ["--continue"] : []),
 		"--output-format", "stream-json",
 		"--verbose",
 		"--dangerously-skip-permissions",
+		"--",
+		prompt,
 	];
 
 	const proc = Bun.spawn({
@@ -85,13 +90,15 @@ export function startAgent(
 
 	currentProc = proc;
 
-	// Drain stderr to logs
+	// Drain stderr to logs and collect for error reporting
+	const stderrChunks: string[] = [];
 	const stderrReader = proc.stderr.getReader();
 	(async () => {
 		while (true) {
 			const { done, value } = await stderrReader.read();
 			if (done) break;
 			const text = new TextDecoder().decode(value);
+			stderrChunks.push(text);
 			console.error("[agent:stderr]", text.trimEnd());
 		}
 	})();
@@ -136,7 +143,16 @@ export function startAgent(
 			}
 
 			await proc.exited;
-			onChunk({ type: "done", costUsd: 0 });
+			const exitCode = proc.exitCode;
+			const stderr = stderrChunks.join("").trim();
+			if (exitCode !== 0 || (stderr && !buffer.trim())) {
+				onChunk({
+					type: "error",
+					error: stderr || `Process exited with code ${exitCode}`,
+				});
+			} else {
+				onChunk({ type: "done", costUsd: 0 });
+			}
 		} catch (err) {
 			console.error("[agent] Error:", err);
 			onChunk({

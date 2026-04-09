@@ -82,12 +82,12 @@ const mainRPC = BrowserView.defineRPC<MainRPC>({
 		requests: {
 			ping: () => "pong",
 			getGreeting: () => "Greetings from the Bun side!",
-			sendMessage: ({ text, apiKey, baseUri, cwd }) => {
+			sendMessage: ({ text, apiKey, baseUri, cwd, continue: doContinue }) => {
 				notifyDesktopMessage(text);
 				startAgent(text, (chunk) => {
 					mainRPC.send.agentChunk(chunk);
 					relayChunkToMobile(chunk);
-				}, { apiKey, baseUri, cwd });
+				}, { apiKey, baseUri, cwd }, doContinue);
 				return { status: "started" };
 			},
 			abortAgent: () => {
@@ -116,7 +116,7 @@ const mainRPC = BrowserView.defineRPC<MainRPC>({
 			mobileStart: async ({ port }) => {
 				try {
 					// Wire up mobile callbacks to use same agent start logic
-					setSendPromptCallback((text) => {
+					setSendPromptCallback((text, doContinue) => {
 						// Notify desktop to prepare for chunks from mobile
 						mainRPC.send.mobileUserMessage({ text });
 						const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -124,7 +124,7 @@ const mainRPC = BrowserView.defineRPC<MainRPC>({
 						startAgent(text, (chunk) => {
 							mainRPC.send.agentChunk(chunk);
 							relayChunkToMobile(chunk);
-						}, { apiKey, baseUri });
+						}, { apiKey, baseUri }, doContinue);
 					});
 					setAbortCallback(() => { abortAgent(); });
 					setSwitchSessionCallback((sessionId: string) => {

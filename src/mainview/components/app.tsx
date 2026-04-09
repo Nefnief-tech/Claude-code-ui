@@ -211,12 +211,20 @@ export function App() {
 		});
 	}, [activeProjectSessions, activeSessionId, mobileEnabled]);
 
-	// Push current messages to mobile server after session load/switch
+	// Push current messages to mobile server (skip during streaming to reduce IPC load)
 	useEffect(() => {
 		if (!mobileEnabled || !activeSessionId) return;
 		if (loadingRef.current) return; // skip during initial load
+		if (isStreaming) return; // skip during streaming — sent on stream end
 		electrobun.rpc?.request.mobileSetMessages({ messages });
-	}, [messages, activeSessionId, mobileEnabled]);
+	}, [messages, activeSessionId, mobileEnabled, isStreaming]);
+
+	// Push messages to mobile when streaming ends
+	useEffect(() => {
+		if (!isStreaming && mobileEnabled && activeSessionId && messages.length > 0 && !loadingRef.current) {
+			electrobun.rpc?.request.mobileSetMessages({ messages });
+		}
+	}, [isStreaming]);
 
 	// Listen for mobile session switch requests
 	useEffect(() => {
@@ -240,16 +248,24 @@ export function App() {
 		setActiveSession(activeSessionId);
 	}, [activeProjectId, activeSessionId, loadMessages, setActiveSession]);
 
-	// Persist messages back to session (skip right after a load)
+	// Persist messages back to session (debounced during streaming to avoid
+	// excessive localStorage writes that can cause QuotaExceededError crashes)
 	useEffect(() => {
 		if (loadingRef.current) {
 			loadingRef.current = false;
 			return;
 		}
-		if (activeSessionId) {
+		if (!activeSessionId) return;
+		if (isStreaming) return; // skip during streaming — persisted on stream end
+		updateSessionMessages(activeSessionId, messages);
+	}, [messages, activeSessionId, updateSessionMessages, isStreaming]);
+
+	// Persist messages once when streaming ends
+	useEffect(() => {
+		if (!isStreaming && activeSessionId && messages.length > 0 && !loadingRef.current) {
 			updateSessionMessages(activeSessionId, messages);
 		}
-	}, [messages, activeSessionId, updateSessionMessages]);
+	}, [isStreaming]);
 
 	// Auto-derive session title from first user message
 	useEffect(() => {
@@ -391,8 +407,8 @@ export function App() {
 	}, [clearDevServerUrl]);
 
 	const handleSendMessage = useCallback(
-		(text: string, cwd?: string, skillContent?: string) => {
-			sendMessage(text, cwd || activeProject?.path || undefined, skillContent);
+		(text: string, cwd?: string, skillContent?: string, skillName?: string) => {
+			sendMessage(text, cwd || activeProject?.path || undefined, skillContent, skillName);
 		},
 		[sendMessage, activeProject],
 	);
