@@ -74,25 +74,44 @@ export function AskQuestionBlock({ input, result, onAnswer }: { input: string; r
 	try { parsed = JSON.parse(input); } catch { /* not JSON */ }
 	const questions = parsed?.questions || [];
 
+	const [selections, setSelections] = useState<Record<number, string>>({});
+	const [submitted, setSubmitted] = useState(false);
+
 	// Try to find chosen answers from the result
-	// Result formats: JSON with question keys, or plain text matching a label
 	let answers: Record<string, string> = {};
-	if (result) {
+	if (result || submitted) {
 		try {
-			const parsedResult = JSON.parse(result);
+			const parsedResult = JSON.parse(result || "{}");
 			if (typeof parsedResult === "object" && parsedResult !== null) {
 				answers = parsedResult as Record<string, string>;
 			}
 		} catch {
-			// Result is plain text — try to match against option labels
 			for (const q of questions) {
 				if (q.options) {
-					const match = q.options.find(o => o.label.toLowerCase() === result.trim().toLowerCase());
+					const match = q.options.find(o => o.label.toLowerCase() === (result || "").trim().toLowerCase());
 					if (match) answers[q.question] = match.label;
 				}
 			}
 		}
+		// Also fold in local selections for display
+		for (const [qi, label] of Object.entries(selections)) {
+			const q = questions[Number(qi)];
+			if (q) answers[q.question] = label;
+		}
 	}
+
+	const interactive = !!onAnswer && !submitted && !result;
+	const allAnswered = interactive && questions.every((_, qi) => selections[qi] !== undefined);
+
+	const handleSubmit = () => {
+		if (!allAnswered || !onAnswer) return;
+		const lines = questions.map((q, qi) => {
+			const answer = selections[qi];
+			return `${q.question}\n${answer}`;
+		});
+		setSubmitted(true);
+		onAnswer(lines.join("\n\n"));
+	};
 
 	if (questions.length === 0) return null;
 
@@ -117,13 +136,11 @@ export function AskQuestionBlock({ input, result, onAnswer }: { input: string; r
 								<div className="space-y-1.5">
 									{q.options.map((opt, oi) => {
 										const isChosen = chosenAnswer === opt.label
-											|| (typeof chosenAnswer === "string" && chosenAnswer.toLowerCase().includes(opt.label.toLowerCase()))
-											|| (result && !chosenAnswer && result.trim().toLowerCase() === opt.label.toLowerCase());
-										const interactive = !!onAnswer;
+											|| (typeof chosenAnswer === "string" && chosenAnswer.toLowerCase().includes(opt.label.toLowerCase()));
 										return (
 											<div
 												key={oi}
-												onClick={interactive ? () => onAnswer!(opt.label) : undefined}
+												onClick={interactive ? () => setSelections((s) => ({ ...s, [qi]: opt.label })) : undefined}
 												className={cn(
 													"rounded-md border px-2.5 py-1.5 text-xs transition-colors",
 													interactive && "cursor-pointer hover:border-primary/60 hover:bg-primary/5",
@@ -153,6 +170,16 @@ export function AskQuestionBlock({ input, result, onAnswer }: { input: string; r
 						</div>
 					);
 				})}
+				{interactive && (
+					<button
+						type="button"
+						onClick={handleSubmit}
+						disabled={!allAnswered}
+						className="w-full rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity disabled:opacity-40 disabled:pointer-events-none"
+					>
+						Submit Answers
+					</button>
+				)}
 			</div>
 		</div>
 	);
