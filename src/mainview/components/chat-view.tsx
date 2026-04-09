@@ -100,7 +100,7 @@ export function AskQuestionBlock({ input, result, onAnswer }: { input: string; r
 		}
 	}
 
-	const interactive = !!onAnswer && !submitted && !result;
+	const interactive = !!onAnswer && !submitted;
 	const allAnswered = interactive && questions.every((_, qi) => selections[qi] !== undefined);
 
 	const handleSubmit = () => {
