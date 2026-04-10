@@ -4,6 +4,7 @@ import { SettingsView } from "./settings-view";
 import { SkillsView } from "./skills-view";
 import { Sidebar } from "./sidebar";
 import { GitPanel } from "./git-panel";
+import { UsagePanel } from "./usage-panel";
 import { BrowserPanel } from "./browser-panel";
 import { AddProjectDialog } from "./add-project-dialog";
 import { OnboardingDialog } from "./onboarding-dialog";
@@ -133,6 +134,16 @@ export function App() {
 	);
 	const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
 	const [showGitPanel, setShowGitPanel] = useState(false);
+	const [showUsagePanel, setShowUsagePanel] = useState(false);
+	const [zaiPlanEnabled, setZaiPlanEnabled] = useState(
+		() => localStorage.getItem("cc-uui:zaiPlan") === "1",
+	);
+	const [planTimerStart, setPlanTimerStart] = useState<number | null>(
+		() => {
+			const v = localStorage.getItem("cc-uui:planTimerStart");
+			return v ? Number(v) : null;
+		},
+	);
 	const [showBrowserPanel, setShowBrowserPanel] = useState(false);
 	const [showOnboarding, setShowOnboarding] = useState(
 		() => !localStorage.getItem("cc-uui:onboarded"),
@@ -408,10 +419,33 @@ export function App() {
 
 	const handleSendMessage = useCallback(
 		(text: string, cwd?: string, skillContent?: string, skillName?: string) => {
+			if (zaiPlanEnabled && !planTimerStart) {
+				const now = Date.now();
+				setPlanTimerStart(now);
+				localStorage.setItem("cc-uui:planTimerStart", String(now));
+			}
+			// Clear expired timer so next send restarts it
+			if (zaiPlanEnabled && planTimerStart) {
+				const remaining = 5 * 60 * 60 * 1000 - (Date.now() - planTimerStart);
+				if (remaining <= 0) {
+					const now = Date.now();
+					setPlanTimerStart(now);
+					localStorage.setItem("cc-uui:planTimerStart", String(now));
+				}
+			}
 			sendMessage(text, cwd || activeProject?.path || undefined, skillContent, skillName);
 		},
-		[sendMessage, activeProject],
+		[sendMessage, activeProject, zaiPlanEnabled, planTimerStart],
 	);
+
+	const handleToggleZaiPlan = useCallback((enabled: boolean) => {
+		setZaiPlanEnabled(enabled);
+		localStorage.setItem("cc-uui:zaiPlan", enabled ? "1" : "0");
+		if (!enabled) {
+			setPlanTimerStart(null);
+			localStorage.removeItem("cc-uui:planTimerStart");
+		}
+	}, []);
 
 	const handleGitCommit = useCallback(
 		async (msg: string) => {
@@ -573,6 +607,9 @@ export function App() {
 							estimatedTokens={estimatedTokens}
 							showGitPanel={showGitPanel}
 							onToggleGitPanel={() => setShowGitPanel((p) => !p)}
+							showUsagePanel={showUsagePanel}
+							onToggleUsagePanel={() => setShowUsagePanel((p) => !p)}
+							zaiPlanEnabled={zaiPlanEnabled}
 							hasGitChanges={
 								gitStatus
 									? gitStatus.staged +
@@ -625,6 +662,19 @@ export function App() {
 							onGenerateCommitMessage={handleGenerateCommitMessage}
 							gitUser={gitUser}
 							gitToken={gitToken}
+						/>
+					</div>
+				)}
+				{activeView === "chat" && showUsagePanel && (
+					<div className="w-80 shrink-0 rounded-xl overflow-hidden border border-border/60 bg-card/30 h-full">
+						<UsagePanel
+							zaiPlanEnabled={zaiPlanEnabled}
+							planTimerStart={planTimerStart}
+							sessionCost={sessionCost}
+							estimatedTokens={estimatedTokens}
+							messageCount={messages.filter((m) => m.role === "user").length}
+							onTogglePlan={handleToggleZaiPlan}
+							onClose={() => setShowUsagePanel(false)}
 						/>
 					</div>
 				)}
