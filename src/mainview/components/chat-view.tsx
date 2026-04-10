@@ -74,6 +74,7 @@ export function AskQuestionBlock({ input, result, onAnswer }: { input: string; r
 	try { parsed = JSON.parse(input); } catch { /* not JSON */ }
 	const questions = parsed?.questions || [];
 
+	// For multiSelect questions, value is a comma-joined string of labels; for single-select, a single label
 	const [selections, setSelections] = useState<Record<number, string>>({});
 	const [submitted, setSubmitted] = useState(false);
 
@@ -102,6 +103,26 @@ export function AskQuestionBlock({ input, result, onAnswer }: { input: string; r
 
 	const interactive = !!onAnswer && !submitted;
 	const allAnswered = interactive && questions.every((_, qi) => selections[qi] !== undefined);
+
+	const toggleOption = (qi: number, label: string, multiSelect?: boolean) => {
+		setSelections((s) => {
+			const current = s[qi];
+			if (multiSelect) {
+				const parts = current ? current.split(", ") : [];
+				if (parts.includes(label)) {
+					const next = parts.filter((p) => p !== label);
+					if (next.length === 0) {
+						const { [qi]: _, ...rest } = s;
+						return rest;
+					}
+					return { ...s, [qi]: next.join(", ") };
+				}
+				return { ...s, [qi]: [...parts, label].join(", ") };
+			}
+			// single select
+			return { ...s, [qi]: label };
+		});
+	};
 
 	const handleSubmit = () => {
 		if (!allAnswered || !onAnswer) return;
@@ -135,12 +156,12 @@ export function AskQuestionBlock({ input, result, onAnswer }: { input: string; r
 							{q.options && q.options.length > 0 && (
 								<div className="space-y-1.5">
 									{q.options.map((opt, oi) => {
-										const isChosen = chosenAnswer === opt.label
-											|| (typeof chosenAnswer === "string" && chosenAnswer.toLowerCase().includes(opt.label.toLowerCase()));
+										const chosenParts = (chosenAnswer || "").split(", ").map((p: string) => p.toLowerCase());
+										const isChosen = chosenParts.includes(opt.label.toLowerCase());
 										return (
 											<div
 												key={oi}
-												onClick={interactive ? () => setSelections((s) => ({ ...s, [qi]: opt.label })) : undefined}
+												onClick={interactive ? () => toggleOption(qi, opt.label, q.multiSelect) : undefined}
 												className={cn(
 													"rounded-md border px-2.5 py-1.5 text-xs transition-colors",
 													interactive && "cursor-pointer hover:border-primary/60 hover:bg-primary/5",
@@ -185,6 +206,93 @@ export function AskQuestionBlock({ input, result, onAnswer }: { input: string; r
 	);
 }
 
+// --- Agent tool rendering ---
+
+export function AgentBlock({ input, result }: { input: string; result?: string }) {
+	const [open, setOpen] = useState(false);
+
+	let parsed: { description?: string; prompt?: string; subagent_type?: string; name?: string; run_in_background?: boolean } | null = null;
+	try { parsed = JSON.parse(input); } catch { /* not JSON */ }
+
+	const description = parsed?.description || parsed?.prompt?.slice(0, 80) || "Subagent";
+	const subagentType = parsed?.subagent_type || "";
+	const agentName = parsed?.name || "";
+	const isBackground = parsed?.run_in_background || false;
+	const isRunning = !result;
+
+	// Extract a concise result summary (first few non-empty lines)
+	let resultText = "";
+	if (result) {
+		try {
+			// Tool results may be wrapped in JSON
+			const r = JSON.parse(result);
+			resultText = typeof r === "string" ? r : result;
+		} catch {
+			resultText = result;
+		}
+	}
+
+	return (
+		<div className="my-1.5 rounded-lg border border-border/60 bg-secondary/50 overflow-hidden" style={{ color: "var(--foreground)" }}>
+			<div className="flex items-center gap-2 px-3 py-2 border-b border-border/40">
+				<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0" style={{ color: "var(--primary)" }}>
+					<path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
+				</svg>
+				<span className="text-xs font-medium">Subagent</span>
+				{subagentType && (
+					<span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: "color-mix(in oklch, var(--primary) 15%, transparent)", color: "var(--primary)" }}>{subagentType}</span>
+				)}
+				{agentName && (
+					<span className="text-[10px] text-muted-foreground">{agentName}</span>
+				)}
+				{isBackground && (
+					<span className="rounded-md px-1.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: "color-mix(in oklch, var(--muted-foreground) 15%, transparent)", color: "var(--muted-foreground)" }}>bg</span>
+				)}
+				<span className="flex-1" />
+				{isRunning ? (
+					<span className="flex items-center gap-1.5">
+						<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full" style={{ backgroundColor: "var(--primary)" }} />
+						<span className="text-[10px] text-muted-foreground">Running...</span>
+					</span>
+				) : (
+					<span className="flex items-center gap-1.5">
+						<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "#22c55e" }}>
+							<path d="M20 6 9 17l-5-5" />
+						</svg>
+						<span className="text-[10px]" style={{ color: "#22c55e" }}>Completed</span>
+					</span>
+				)}
+			</div>
+			<div className="px-3 py-1.5 text-xs text-muted-foreground truncate">
+				{description}
+			</div>
+			{resultText && (
+				<div className="border-t border-border/40">
+					<button
+						type="button"
+						onClick={() => setOpen(!open)}
+						className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground transition-colors"
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24"
+							fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+							className={cn("transition-transform shrink-0", open && "rotate-90")}
+						>
+							<path d="m9 18 6-6-6-6" />
+						</svg>
+						<span className="font-medium">Result</span>
+					</button>
+					{open && (
+						<div className="max-h-64 overflow-y-auto border-t border-border/30 bg-background/50 p-3 text-xs leading-relaxed">
+							<MarkdownContent content={resultText} />
+						</div>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export function ToolUseBlock({ part, result, onAnswer }: { part: Extract<MessagePart, { type: "tool_use" }>; result?: string; onAnswer?: (answer: string) => void }) {
 	const [open, setOpen] = useState(part.toolName === "Edit" || part.toolName === "Write");
 
@@ -196,6 +304,11 @@ export function ToolUseBlock({ part, result, onAnswer }: { part: Extract<Message
 	// Route AskUserQuestion to custom renderer
 	if (part.toolName === "AskUserQuestion") {
 		return <AskQuestionBlock input={part.toolInput} result={result} onAnswer={onAnswer} />;
+	}
+
+	// Route Agent to custom renderer
+	if (part.toolName === "Agent") {
+		return <AgentBlock input={part.toolInput} result={result} />;
 	}
 
 	let parsed: Record<string, unknown> | null = null;
@@ -456,7 +569,8 @@ export function processParts(parts: MessagePart[]): ProcessedPart[] {
 			item.toolName === "Edit" ||
 			item.toolName === "Write" ||
 			item.toolName === "TodoWrite" ||
-			item.toolName === "AskUserQuestion"
+			item.toolName === "AskUserQuestion" ||
+			item.toolName === "Agent"
 		);
 
 		if (isToolCall && !isProminent) {
