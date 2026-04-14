@@ -123,7 +123,7 @@ jobs:
           if ($roslyn) { $csc = $roslyn.FullName }
 
           Write-Host "Compiling SFX stub..."
-          & $csc -nologo -optimize -target:winexe -out:$stubExe -r:System.IO.Compression.FileSystem.dll $stubCs
+          & $csc -nologo -optimize -target:winexe -out:$stubExe -r:System.IO.Compression.dll -r:System.IO.Compression.FileSystem.dll $stubCs
           if ($LASTEXITCODE -ne 0) { throw "csc compilation failed" }
 
           # 3. Combine: stub exe + marker + zip payload -> single .exe

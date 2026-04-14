@@ -96,15 +96,16 @@ class Program
             Console.WriteLine("Installed. Launching...");
         }
 
-        var psi = new ProcessStartInfo(launcherPath)
-        {
-            WorkingDirectory = Path.GetDirectoryName(launcherPath)
-        };
+        var psi = new ProcessStartInfo(launcherPath);
+        psi.WorkingDirectory = Path.GetDirectoryName(launcherPath);
         // Pass through any non-flag args
+        string extraArgs = "";
         foreach (var arg in args)
         {
-            if (!arg.StartsWith("-")) psi.ArgumentList.Add(arg);
+            if (!arg.StartsWith("-"))
+                extraArgs += (extraArgs.Length > 0 ? " " : "") + "\"" + arg.Replace("\"", "\\\"") + "\"";
         }
+        if (extraArgs.Length > 0) psi.Arguments = extraArgs;
         Process.Start(psi);
     }
 
