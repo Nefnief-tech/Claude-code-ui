@@ -24,134 +24,105 @@ jobs:
 
       - run: bun run build:stable
 
-      # --- Linux: self-extracting .run installer ---
+      # --- Linux: Electrobun self-extracting binary ---
+      # Combines the extractor + ELECTROBUN_METADATA_V1 marker + metadata JSON
+      # + ELECTROBUN_ARCHIVE_V1 marker + compressed tar.zst into a single executable.
+      # The Electrobun extractor handles extraction to ~/.local/share/<app-identifier>
+      # and creates a desktop shortcut automatically.
       - name: Create Linux installer
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
+
           APP_DIR="build/stable-linux-x64/cc-uui"
-          OUT="dist/cc-uui-linux-x64.run"
+          EXTRACTOR="node_modules/electrobun/dist-linux-x64/extractor"
 
-          cat > "$OUT" << 'HEADER'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          INSTALL_DIR="$HOME/.local/share/cc-uui"
-          DESKTOP_FILE="$HOME/.local/applications/cc-uui.desktop"
-          EXTRACT=0
-
-          for arg in "$@"; do
-            case "$arg" in
-              --help|-h)
-                echo "cc-uui — AI coding assistant"
-                echo ""
-                echo "  (no args)    Install & launch (first run) or just launch"
-                echo "  --install    Force re-install"
-                echo "  --uninstall  Remove cc-uui"
-                exit 0
-                ;;
-              --install) EXTRACT=1 ;;
-              --uninstall)
-                echo "Removing cc-uui..."
-                rm -rf "$INSTALL_DIR"
-                rm -f "$DESKTOP_FILE"
-                rm -f "$HOME/.local/bin/cc-uui"
-                echo "Done."
-                exit 0
-                ;;
-            esac
-          done
-
-          if [ "$EXTRACT" -eq 1 ] || [ ! -f "$INSTALL_DIR/bin/launcher" ]; then
-            echo "Installing cc-uui to $INSTALL_DIR ..."
-            mkdir -p "$INSTALL_DIR"
-            sed '1,/^#__PAYLOAD__/d' "$0" | tar xz -C "$INSTALL_DIR"
-            chmod +x "$INSTALL_DIR/bin/launcher"
-
-            mkdir -p "$(dirname "$DESKTOP_FILE")"
-            cat > "$DESKTOP_FILE" << DESKTOP
-          [Desktop Entry]
-          Type=Application
-          Name=cc-uui
-          Comment=AI coding assistant
-          Exec=$INSTALL_DIR/bin/launcher
-          Icon=$INSTALL_DIR/Resources/icon.png
-          Terminal=false
-          Categories=Development;
-          DESKTOP
-
-            if [ -d "$HOME/.local/bin" ]; then
-              ln -sf "$INSTALL_DIR/bin/launcher" "$HOME/.local/bin/cc-uui"
-            fi
-            echo "Installed. Launching..."
+          # Find the tar.zst archive created by Electrobun build
+          TAR_ZST=$(find "$APP_DIR/Resources" -name "*.tar.zst" | head -1)
+          if [ -z "$TAR_ZST" ]; then
+            echo "ERROR: No tar.zst found in build output"
+            exit 1
           fi
 
-          exec "$INSTALL_DIR/bin/launcher" "$@"
-          exit 0
-          #__PAYLOAD__
-          HEADER
+          # Read metadata
+          METADATA_JSON=$(cat "$APP_DIR/Resources/metadata.json")
 
-          tar cz -C "$APP_DIR" . >> "$OUT"
+          echo "Building self-extracting installer..."
+          echo "  Extractor: $EXTRACTOR"
+          echo "  Archive: $TAR_ZST"
+          echo "  Metadata: $METADATA_JSON"
+
+          # Combine: extractor + ELECTROBUN_METADATA_V1 + metadata + ELECTROBUN_ARCHIVE_V1 + tar.zst
+          OUT="dist/cc-uui-linux-x64"
+          cat "$EXTRACTOR" > "$OUT"
+          printf 'ELECTROBUN_METADATA_V1' >> "$OUT"
+          printf '%s' "$METADATA_JSON" >> "$OUT"
+          printf 'ELECTROBUN_ARCHIVE_V1' >> "$OUT"
+          cat "$TAR_ZST" >> "$OUT"
           chmod +x "$OUT"
+
           echo "Linux installer size: $(du -h "$OUT" | cut -f1)"
 
-      # --- Windows: compile C# SFX stub, append zip payload → single .exe ---
+      # --- Windows: Electrobun extractor + archive in a zip ---
+      # Electrobun's Windows extractor expects the exe, a matching .metadata.json,
+      # and a matching .tar.zst file alongside it.
       - name: Create Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          # 1. Zip the built app
           $appDir = Resolve-Path "build\stable-win-x64\cc-uui"
-          $payloadZip = "dist\payload.zip"
-          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
-          if (Test-Path $payloadZip) { Remove-Item $payloadZip }
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::CreateFromDirectory($appDir.Path, $payloadZip)
+          $extractor = "node_modules\electrobun\dist-win-x64\extractor.exe"
 
-          # 2. Compile the C# SFX stub (csc is on windows-latest via .NET Framework)
-          $stubCs = "scripts\sfx-stub.cs"
-          $stubExe = "dist\sfx-stub.exe"
-          $csc = "${env:WINDIR}\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          if (-not (Test-Path $csc)) {
-            # Fallback: find csc from .NET SDK
-            $csc = (Get-ChildItem -Recurse "${env:ProgramFiles}\dotnet\sdk" -Filter "csc.dll" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          # Find the tar.zst archive
+          $tarZst = Get-ChildItem "$appDir\Resources\*.tar.zst" | Select-Object -First 1
+          if (-not $tarZst) {
+            Write-Error "No tar.zst found in build output"
+            exit 1
           }
-          # Use Roslyn csc.exe from .NET SDK if available, otherwise Framework csc
-          $roslyn = Get-ChildItem -Recurse "${env:ProgramFiles}\dotnet\sdk" -Filter "Roslyn\csc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($roslyn) { $csc = $roslyn.FullName }
 
-          Write-Host "Compiling SFX stub..."
-          & $csc -nologo -optimize -target:winexe -out:$stubExe -r:System.IO.Compression.dll -r:System.IO.Compression.FileSystem.dll $stubCs
-          if ($LASTEXITCODE -ne 0) { throw "csc compilation failed" }
+          $metadataJson = Get-Content "$appDir\Resources\metadata.json" -Raw
 
-          # 3. Combine: stub exe + marker + zip payload -> single .exe
-          $marker = [System.Text.Encoding]::ASCII.GetBytes("__CCUUI_PAYLOAD__")
-          $finalExe = "dist\cc-uui-windows-x64.exe"
+          Write-Host "Building Windows installer..."
+          Write-Host "  Extractor: $extractor"
+          Write-Host "  Archive: $($tarZst.FullName)"
+          Write-Host "  Metadata: $metadataJson"
 
-          $stubBytes = [IO.File]::ReadAllBytes($stubExe)
-          $zipBytes = [IO.File]::ReadAllBytes($payloadZip)
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
 
-          $fs = [IO.File]::Create($finalExe)
-          $fs.Write($stubBytes, 0, $stubBytes.Length)
-          $fs.Write($marker, 0, $marker.Length)
-          $fs.Write($zipBytes, 0, $zipBytes.Length)
-          $fs.Close()
+          $baseName = "cc-uui-windows-x64"
+          $exePath = "dist\$baseName.exe"
+          $metaPath = "dist\$baseName.metadata.json"
+          $archivePath = "dist\$baseName.tar.zst"
+          $zipPath = "dist\$baseName.zip"
 
-          $size = [math]::Round((Get-Item $finalExe).Length / 1MB, 1)
-          Write-Host "Windows installer size: $size MB"
+          # Copy extractor as the installer exe
+          Copy-Item $extractor $exePath
 
-          # Clean up intermediates
-          Remove-Item $stubExe -ErrorAction SilentlyContinue
-          Remove-Item $payloadZip -ErrorAction SilentlyContinue
+          # Write metadata
+          Set-Content $metaPath $metadataJson
+
+          # Copy archive
+          Copy-Item $tarZst.FullName $archivePath
+
+          # Zip them together for distribution
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          if (Test-Path $zipPath) { Remove-Item $zipPath }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("dist", $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+
+          # Remove the individual files (keep only the zip)
+          # Actually keep all three + zip so release has both options
+
+          $size = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
+          Write-Host "Windows installer zip size: $size MB"
 
       - uses: actions/upload-artifact@v4
         with:
           name: build-${{ runner.os }}
           path: |
-            dist/cc-uui-linux-x64.run
-            dist/cc-uui-windows-x64.exe
+            dist/cc-uui-linux-x64
+            dist/cc-uui-windows-x64.zip
           if-no-files-found: warn
 
   release:
