@@ -89,12 +89,12 @@ jobs:
           Write-Host "  Archive: $($tarZst.FullName)"
           Write-Host "  Metadata: $metadataJson"
 
-          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist","staging" | Out-Null
 
           $baseName = "cc-uui-windows-x64"
-          $exePath = "dist\$baseName.exe"
-          $metaPath = "dist\$baseName.metadata.json"
-          $archivePath = "dist\$baseName.tar.zst"
+          $exePath = "staging\$baseName.exe"
+          $metaPath = "staging\$baseName.metadata.json"
+          $archivePath = "staging\$baseName.tar.zst"
           $zipPath = "dist\$baseName.zip"
 
           # Copy extractor as the installer exe
@@ -106,13 +106,13 @@ jobs:
           # Copy archive
           Copy-Item $tarZst.FullName $archivePath
 
-          # Zip them together for distribution
+          # Zip staging folder into dist
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           if (Test-Path $zipPath) { Remove-Item $zipPath }
-          [System.IO.Compression.ZipFile]::CreateFromDirectory("dist", $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("staging", $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
-          # Remove the individual files (keep only the zip)
-          # Actually keep all three + zip so release has both options
+          # Clean up staging
+          Remove-Item "staging" -Recurse -Force
 
           $size = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
           Write-Host "Windows installer zip size: $size MB"
