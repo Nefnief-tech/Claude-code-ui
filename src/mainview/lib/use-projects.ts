@@ -1,14 +1,44 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "./use-agent-chat";
 
 const PROJECTS_KEY = "cc-uui:projects";
 const OLD_SESSIONS_KEY = "cc-uui:sessions";
+
+function truncateOldMessages(messages: ChatMessage[]): ChatMessage[] {
+	const recentCount = 10;
+	if (messages.length <= recentCount) return messages;
+	return messages.map((msg, i) => {
+		if (i >= messages.length - recentCount) return msg;
+		return {
+			...msg,
+			parts: msg.parts.map((p) => {
+				if (p.type === "text" && p.text.length > 10240) {
+					return { ...p, text: p.text.slice(0, 500) + "...(truncated)" };
+				}
+				return p;
+			}),
+		};
+	});
+}
+
+function truncateAllLarge(messages: ChatMessage[]): ChatMessage[] {
+	return messages.map((msg) => ({
+		...msg,
+		parts: msg.parts.map((p) => {
+			if (p.type === "text" && p.text.length > 5120) {
+				return { ...p, text: p.text.slice(0, 500) + "...(truncated)" };
+			}
+			return p;
+		}),
+	}));
+}
 
 export type Session = {
 	id: string;
 	title: string;
 	messages: ChatMessage[];
 	createdAt: number;
+	pinned?: boolean;
 };
 
 export type Project = {
@@ -37,10 +67,24 @@ function loadProjects(): Project[] {
 function persistProjects(projects: Project[]) {
 	try {
 		localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
-	} catch {
-		// localStorage quota exceeded — silently skip persist
-		// The data is still in memory; only persistence fails
-		console.warn("[projects] Failed to persist: storage quota exceeded");
+	} catch (e) {
+		if (e instanceof DOMException && e.name === "QuotaExceededError") {
+			// Attempt to truncate large messages and retry
+			const truncated = projects.map((p) => ({
+				...p,
+				sessions: p.sessions.map((s) => ({
+					...s,
+					messages: truncateAllLarge(s.messages),
+				})),
+			}));
+			try {
+				localStorage.setItem(PROJECTS_KEY, JSON.stringify(truncated));
+			} catch {
+				console.warn("[projects] Failed to persist even after truncation");
+			}
+		} else {
+			console.warn("[projects] Failed to persist:", e);
+		}
 	}
 }
 
@@ -232,13 +276,14 @@ export function useProjects() {
 	const updateSessionMessages = useCallback(
 		(id: string, messages: ChatMessage[]) => {
 			if (!activeProjectId) return;
+			const safe = truncateOldMessages(messages);
 			setProjects((prev) =>
 				prev.map((p) =>
 					p.id === activeProjectId
 						? {
 								...p,
 								sessions: p.sessions.map((s) =>
-									s.id === id ? { ...s, messages } : s,
+									s.id === id ? { ...s, messages: safe } : s,
 								),
 							}
 						: p,
@@ -247,6 +292,41 @@ export function useProjects() {
 		},
 		[activeProjectId],
 	);
+
+	const pinSession = useCallback((id: string) => {
+		setProjects((prev) =>
+			prev.map((p) => ({
+				...p,
+				sessions: p.sessions.map((s) =>
+					s.id === id ? { ...s, pinned: true } : s,
+				),
+			})),
+		);
+	}, []);
+
+	const unpinSession = useCallback((id: string) => {
+		setProjects((prev) =>
+			prev.map((p) => ({
+				...p,
+				sessions: p.sessions.map((s) =>
+					s.id === id ? { ...s, pinned: false } : s,
+				),
+			})),
+		);
+	}, []);
+
+	const reorderSessions = useCallback((sessionId: string, toIndex: number) => {
+		setProjects((prev) =>
+			prev.map((p) => {
+				const idx = p.sessions.findIndex((s) => s.id === sessionId);
+				if (idx === -1 || idx === toIndex) return p;
+				const next = [...p.sessions];
+				const [moved] = next.splice(idx, 1);
+				next.splice(toIndex, 0, moved);
+				return { ...p, sessions: next };
+			}),
+		);
+	}, []);
 
 	return {
 		projects,
@@ -264,5 +344,8 @@ export function useProjects() {
 		deleteSession,
 		updateSessionTitle,
 		updateSessionMessages,
+		pinSession,
+		unpinSession,
+		reorderSessions,
 	};
 }

@@ -262,8 +262,16 @@ export function SkillsView({
 						{/* Skill list */}
 						<div className="w-72 shrink-0 border-r border-border/60 overflow-y-auto p-3 space-y-2">
 							{loading && skills.length === 0 ? (
-								<div className="flex items-center justify-center py-8">
-									<div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+								<div className="space-y-2">
+									{[0, 1, 2, 3].map((i) => (
+										<div key={i} className="rounded-lg border border-border/60 px-3 py-2.5">
+											<div className="flex items-center gap-2 mb-1.5">
+												<div className="h-4 w-24 animate-pulse rounded-md bg-secondary/40" />
+												<div className="h-4 w-12 animate-pulse rounded-full bg-secondary/40" />
+											</div>
+											<div className="h-3 w-full animate-pulse rounded-md bg-secondary/30" />
+										</div>
+									))}
 								</div>
 							) : skills.length === 0 ? (
 								<div className="py-8 text-center">

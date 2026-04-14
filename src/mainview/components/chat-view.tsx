@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import type { ChatMessage, MessagePart } from "@/lib/use-agent-chat";
 import type { SkillInfo } from "@/lib/use-skills";
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -804,14 +805,14 @@ export function groupMessages(messages: ChatMessage[]): ChatMessage[][] {
 	return groups;
 }
 
-export const MessageBubble = React.memo(function MessageBubble({ messages, onAnswer }: { messages: ChatMessage[]; onAnswer?: (answer: string) => void }) {
+export const MessageBubble = React.memo(function MessageBubble({ messages, onAnswer, onCopy, onDelete, onEdit }: { messages: ChatMessage[]; onAnswer?: (answer: string) => void; onCopy?: () => void; onDelete?: () => void; onEdit?: () => void }) {
 	const isUser = messages[0].role === "user";
 	const allParts = messages.flatMap((m) => m.parts);
 	const isEmpty = allParts.length === 0 && !isUser;
 	const processed = isUser ? null : processParts(allParts);
 
 	return (
-		<div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+		<div className={`group relative flex ${isUser ? "justify-end" : "justify-start"}`}>
 			<div
 				className={`max-w-[85%] rounded-2xl px-4 py-3 ${
 					isUser
@@ -852,6 +853,46 @@ export const MessageBubble = React.memo(function MessageBubble({ messages, onAns
 					}
 				})}
 			</div>
+			{/* Action buttons */}
+			<div className={cn(
+				"absolute top-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5",
+				isUser ? "-translate-y-full right-0" : "-translate-y-full left-0",
+			)}>
+				<button
+					type="button"
+					onClick={onCopy}
+					className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+					title="Copy"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+						<rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+					</svg>
+				</button>
+				{isUser && onEdit && (
+					<button
+						type="button"
+						onClick={onEdit}
+						className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+						title="Edit & resend"
+					>
+						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+							<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+						</svg>
+					</button>
+				)}
+				{isUser && onDelete && (
+					<button
+						type="button"
+						onClick={onDelete}
+						className="rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+						title="Delete"
+					>
+						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+							<path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+						</svg>
+					</button>
+				)}
+			</div>
 		</div>
 	);
 });
@@ -863,14 +904,15 @@ export const ChatView = React.forwardRef(function ChatView({
 	abort,
 	showGitPanel,
 	onToggleGitPanel,
-	showUsagePanel,
-	onToggleUsagePanel,
+	onOpenUsage,
 	zaiPlanEnabled,
 	hasGitChanges,
 	skills,
 	onGetSkillContent,
 	sessionCost,
 	estimatedTokens,
+	onDeleteMessage,
+	onEditMessage,
 }: {
 	messages: ChatMessage[];
 	isStreaming: boolean;
@@ -878,14 +920,15 @@ export const ChatView = React.forwardRef(function ChatView({
 	abort: () => void;
 	showGitPanel?: boolean;
 	onToggleGitPanel?: () => void;
-	showUsagePanel?: boolean;
-	onToggleUsagePanel?: () => void;
+	onOpenUsage?: () => void;
 	zaiPlanEnabled?: boolean;
 	hasGitChanges?: boolean;
 	skills: SkillInfo[];
 	onGetSkillContent: (directory: string) => Promise<string>;
 	sessionCost: number;
 	estimatedTokens: number;
+	onDeleteMessage?: (id: string) => void;
+	onEditMessage?: (id: string) => void;
 }, ref: React.Ref<{ focusInput: () => void }>) {
 	const [activeSkill, setActiveSkill] = useState<SkillInfo | null>(null);
 	const [skillContent, setSkillContent] = useState<string>("");
@@ -897,6 +940,13 @@ export const ChatView = React.forwardRef(function ChatView({
 
 	useImperativeHandle(ref, () => ({
 		focusInput: () => inputRef.current?.focus(),
+		setInputText: (text: string) => {
+			if (inputRef.current) {
+				inputRef.current.value = text;
+				inputRef.current.style.height = "auto";
+				inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 200)}px`;
+			}
+		},
 	}), []);
 
 	const getInputValue = useCallback(() => inputRef.current?.value ?? "", []);
@@ -919,9 +969,49 @@ export const ChatView = React.forwardRef(function ChatView({
 		}
 	}, []);
 
+	// Virtualizer setup
+	const groups = groupMessages(messages);
+	const viewportRef = useRef<HTMLDivElement | null>(null);
+
+	const getViewport = useCallback(() => {
+		if (viewportRef.current) return viewportRef.current;
+		const vp = scrollRef.current?.querySelector("[data-radix-scroll-area-viewport]") as HTMLDivElement | null;
+		if (vp) viewportRef.current = vp;
+		return vp;
+	}, []);
+
+	const virtualizer = useVirtualizer({
+		count: groups.length,
+		getScrollElement: getViewport,
+		estimateSize: (index) => {
+			const group = groups[index];
+			if (!group) return 80;
+			const isUser = group[0].role === "user";
+			if (isUser) return 60;
+			const hasTools = group.some(m => m.parts.some(p => p.type === "tool_use" || p.type === "tool_result"));
+			return hasTools ? 200 : 80;
+		},
+		overscan: 5,
+		measureElement: (el) => el.getBoundingClientRect().height,
+	});
+
 	useEffect(() => {
 		scrollToBottom();
 	}, [messages, scrollToBottom]);
+
+	// Message action handlers
+	const handleCopy = useCallback((group: ChatMessage[]) => {
+		const text = group.flatMap(m => m.parts.filter(p => p.type === "text").map(p => p.type === "text" ? p.text : "")).join("\n");
+		navigator.clipboard.writeText(text);
+	}, []);
+
+	const handleDelete = useCallback((id: string) => {
+		onDeleteMessage?.(id);
+	}, [onDeleteMessage]);
+
+	const handleEdit = useCallback((id: string) => {
+		onEditMessage?.(id);
+	}, [onEditMessage]);
 
 	// Show/hide picker based on input
 	const updatePicker = useCallback((value: string) => {
@@ -1029,10 +1119,47 @@ export const ChatView = React.forwardRef(function ChatView({
 							</p>
 						</div>
 					</div>
+				) : groups.length > 20 ? (
+					<div className="mx-auto max-w-3xl p-6" style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+						{virtualizer.getVirtualItems().map((virtualItem) => {
+							const group = groups[virtualItem.index];
+							if (!group) return null;
+							return (
+								<div
+									key={group[0].id}
+									data-index={virtualItem.index}
+									ref={virtualizer.measureElement}
+									style={{
+										position: "absolute",
+										top: virtualItem.start,
+										left: 0,
+										width: "100%",
+									}}
+								>
+									<div className="pb-4">
+										<MessageBubble
+											messages={group}
+											onAnswer={handleAnswer}
+											onCopy={() => handleCopy(group)}
+											onDelete={group[0].role === "user" ? () => handleDelete(group[0].id) : undefined}
+											onEdit={group[0].role === "user" ? () => handleEdit(group[0].id) : undefined}
+										/>
+									</div>
+								</div>
+							);
+						})}
+					</div>
 				) : (
 					<div className="mx-auto max-w-3xl space-y-4 p-6">
-						{groupMessages(messages).map((group) => (
-							<MessageBubble key={group[0].id} messages={group} onAnswer={handleAnswer} />
+						{groups.map((group) => (
+							<MessageBubble
+								key={group[0].id}
+								messages={group}
+								onAnswer={handleAnswer}
+								onCopy={() => handleCopy(group)}
+								onDelete={group[0].role === "user" ? () => handleDelete(group[0].id) : undefined}
+								onEdit={group[0].role === "user" ? () => handleEdit(group[0].id) : undefined}
+							/>
 						))}
 					</div>
 				)}
@@ -1201,16 +1328,12 @@ export const ChatView = React.forwardRef(function ChatView({
 								)}
 							</button>
 						)}
-						{onToggleUsagePanel && (
+						{onOpenUsage && (
 							<button
 								type="button"
-								onClick={onToggleUsagePanel}
-								className={`relative rounded-xl border p-2.5 transition-colors ${
-									showUsagePanel
-										? "border-primary/60 bg-primary/10 text-primary"
-										: "border-border/60 text-muted-foreground hover:bg-accent hover:text-foreground"
-								}`}
-								title="Toggle Usage Panel"
+								onClick={onOpenUsage}
+								className="relative rounded-xl border border-border/60 p-2.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+								title="Usage"
 							>
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
@@ -1227,8 +1350,8 @@ export const ChatView = React.forwardRef(function ChatView({
 									<path d="M18 20V4" />
 									<path d="M6 20v-4" />
 								</svg>
-								{zaiPlanEnabled && !showUsagePanel && (
-									<span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-primary" />
+								{zaiPlanEnabled && (
+									<span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 animate-pulse" />
 								)}
 							</button>
 						)}

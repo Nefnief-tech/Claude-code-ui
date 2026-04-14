@@ -2,9 +2,9 @@ import { ChatView } from "./chat-view";
 import { DashboardView } from "./dashboard-view";
 import { SettingsView } from "./settings-view";
 import { SkillsView } from "./skills-view";
+import { UsageView } from "./usage-view";
 import { Sidebar } from "./sidebar";
 import { GitPanel } from "./git-panel";
-import { UsagePanel } from "./usage-panel";
 import { BrowserPanel } from "./browser-panel";
 import { AddProjectDialog } from "./add-project-dialog";
 import { OnboardingDialog } from "./onboarding-dialog";
@@ -14,6 +14,7 @@ import { useProjects } from "@/lib/use-projects";
 import { useGit } from "@/lib/use-git";
 import { useSkills } from "@/lib/use-skills";
 import { useTheme } from "@/lib/use-theme";
+import { useToast, addToast, removeToast } from "@/lib/use-toast";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 function ResizeHandle({
@@ -46,8 +47,67 @@ function ResizeHandle({
 	);
 }
 
+function ShortcutRow({ keys, desc }: { keys: string[]; desc: string }) {
+	return (
+		<div className="flex items-center justify-between text-[13px]">
+			<span className="text-muted-foreground">{desc}</span>
+			<div className="flex items-center gap-1">
+				{keys.map((k, i) => (
+					<span key={i}>
+						{i > 0 && <span className="text-[10px] text-muted-foreground/50 mx-0.5">+</span>}
+						<kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/60 bg-secondary/40 px-1.5 text-[10px] font-mono text-foreground">
+							{k}
+						</kbd>
+					</span>
+				))}
+			</div>
+		</div>
+	);
+}
+
+function ToastContainer({ toasts }: { toasts: ReturnType<typeof useToast>["toasts"] }) {
+	if (toasts.length === 0) return null;
+	return (
+		<div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 items-center">
+			{toasts.map((t) => (
+				<div
+					key={t.id}
+					className={`flex items-center gap-2 rounded-lg border border-border/60 bg-card px-4 py-2 text-sm text-foreground shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200 ${
+						t.type === "error"
+							? "border-red-500/40 text-red-400"
+							: t.type === "success"
+								? "border-green-500/40 text-green-400"
+								: ""
+					}`}
+				>
+					{t.type === "error" && (
+						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+							<circle cx="12" cy="12" r="10" /><path d="m15 9-6 6" /><path d="m9 9 6 6" />
+						</svg>
+					)}
+					{t.type === "success" && (
+						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+							<path d="M20 6 9 17l-5-5" />
+						</svg>
+					)}
+					<span className="text-foreground">{t.message}</span>
+					<button
+						type="button"
+						onClick={() => removeToast(t.id)}
+						className="shrink-0 rounded-md p-0.5 text-muted-foreground hover:text-foreground transition-colors"
+					>
+						<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+							<path d="M18 6 6 18M6 6l12 12" />
+						</svg>
+					</button>
+				</div>
+			))}
+		</div>
+	);
+}
+
 export function App() {
-	const [activeView, setActiveView] = useState<"chat" | "dashboard" | "settings" | "skills">("chat");
+	const [activeView, setActiveView] = useState<"chat" | "dashboard" | "settings" | "skills" | "usage">("chat");
 	const { theme, resolvedTheme, setTheme } = useTheme();
 	const {
 		projects,
@@ -64,6 +124,9 @@ export function App() {
 		deleteSession,
 		updateSessionTitle,
 		updateSessionMessages,
+		pinSession,
+		unpinSession,
+		reorderSessions,
 	} = useProjects();
 	const {
 		messages,
@@ -115,6 +178,8 @@ export function App() {
 		clearFeedback: skillsClearFeedback,
 	} = useSkills();
 
+	const { toasts } = useToast();
+
 	// Load skills on startup so slash commands work in chat
 	useEffect(() => {
 		skillsRefresh();
@@ -133,8 +198,9 @@ export function App() {
 		() => localStorage.getItem("cc-uui:gitToken") ?? "",
 	);
 	const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
-	const [showGitPanel, setShowGitPanel] = useState(false);
-	const [showUsagePanel, setShowUsagePanel] = useState(false);
+	const [showGitPanel, setShowGitPanel] = useState(
+		() => localStorage.getItem("cc-uui:gitPanelOpen") === "1",
+	);
 	const [zaiPlanEnabled, setZaiPlanEnabled] = useState(
 		() => localStorage.getItem("cc-uui:zaiPlan") === "1",
 	);
@@ -145,16 +211,19 @@ export function App() {
 		},
 	);
 	const [showBrowserPanel, setShowBrowserPanel] = useState(false);
+	const [showShortcuts, setShowShortcuts] = useState(false);
 	const [showOnboarding, setShowOnboarding] = useState(
 		() => !localStorage.getItem("cc-uui:onboarded"),
 	);
-	const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-	const [chatPanelWidth, setChatPanelWidth] = useState(400);
+	const [sidebarCollapsed, setSidebarCollapsed] = useState(
+		() => localStorage.getItem("cc-uui:sidebarCollapsed") === "1",
+	);
+	const [chatPanelWidth, setChatPanelWidth] = useState(
+		() => Number(localStorage.getItem("cc-uui:chatPanelWidth")) || 400,
+	);
 	const chatWidthAtDragStart = useRef(400);
 	const mainRef = useRef<HTMLElement>(null);
-	const chatViewRef = useRef<{ focusInput: () => void }>(null);
-	const [toast, setToast] = useState<string | null>(null);
-	const toastTimer = useRef<ReturnType<typeof setTimeout>>();
+	const chatViewRef = useRef<{ focusInput: () => void; setInputText: (text: string) => void }>(null);
 
 	// Mobile access state
 	type MobileStatus = {
@@ -189,6 +258,27 @@ export function App() {
 		localStorage.setItem("cc-uui:gitUser", gitUser);
 		localStorage.setItem("cc-uui:gitToken", gitToken);
 	}, [gitUser, gitToken]);
+
+	// Persist UI state
+	useEffect(() => {
+		localStorage.setItem("cc-uui:sidebarCollapsed", sidebarCollapsed ? "1" : "0");
+	}, [sidebarCollapsed]);
+
+	useEffect(() => {
+		localStorage.setItem("cc-uui:chatPanelWidth", String(chatPanelWidth));
+	}, [chatPanelWidth]);
+
+	useEffect(() => {
+		localStorage.setItem("cc-uui:gitPanelOpen", showGitPanel ? "1" : "0");
+	}, [showGitPanel]);
+
+	useEffect(() => {
+		if (activeProjectId) localStorage.setItem("cc-uui:activeProjectId", activeProjectId);
+	}, [activeProjectId]);
+
+	useEffect(() => {
+		if (activeSessionId) localStorage.setItem("cc-uui:activeSessionId", activeSessionId);
+	}, [activeSessionId]);
 
 	// Persist mobile settings
 	useEffect(() => {
@@ -377,6 +467,34 @@ export function App() {
 		setShowOnboarding(false);
 	}, []);
 
+	// Message action handlers
+	const handleDeleteMessage = useCallback(
+		(id: string) => {
+			if (!activeSessionId) return;
+			const filtered = messages.filter((m) => m.id !== id);
+			updateSessionMessages(activeSessionId, filtered);
+		},
+		[activeSessionId, messages, updateSessionMessages],
+	);
+
+	const handleEditMessage = useCallback(
+		(id: string) => {
+			if (!activeSessionId) return;
+			const msg = messages.find((m) => m.id === id);
+			if (!msg) return;
+			const textPart = msg.parts.find((p) => p.type === "text");
+			const text = textPart && textPart.type === "text" ? textPart.text : "";
+			// Delete this message and all after it
+			const idx = messages.findIndex((m) => m.id === id);
+			const trimmed = messages.slice(0, idx);
+			updateSessionMessages(activeSessionId, trimmed);
+			// Populate input
+			chatViewRef.current?.setInputText(text);
+			chatViewRef.current?.focusInput();
+		},
+		[activeSessionId, messages, updateSessionMessages],
+	);
+
 	// Keyboard shortcuts
 	useEffect(() => {
 		const handler = (e: KeyboardEvent) => {
@@ -390,12 +508,17 @@ export function App() {
 				} else if (e.key === "k") {
 					e.preventDefault();
 					chatViewRef.current?.focusInput();
+				} else if (e.key === "/") {
+					e.preventDefault();
+					setShowShortcuts((s) => !s);
 				}
+			} else if (e.key === "Escape" && showShortcuts) {
+				setShowShortcuts(false);
 			}
 		};
 		window.addEventListener("keydown", handler);
 		return () => window.removeEventListener("keydown", handler);
-	}, [handleNewSession]);
+	}, [handleNewSession, showShortcuts]);
 
 	const handleShowOnboarding = useCallback(() => {
 		localStorage.removeItem("cc-uui:onboarded");
@@ -406,9 +529,7 @@ export function App() {
 	useEffect(() => {
 		if (devServerUrl) {
 			setShowBrowserPanel(true);
-			clearTimeout(toastTimer.current);
-			setToast("Dev server started — browser panel opened");
-			toastTimer.current = setTimeout(() => setToast(null), 3000);
+			addToast("Dev server started — browser panel opened", "info");
 		}
 	}, [devServerUrl]);
 
@@ -449,13 +570,23 @@ export function App() {
 
 	const handleGitCommit = useCallback(
 		async (msg: string) => {
-			await gitCommit(msg, gitUser || undefined);
+			try {
+				await gitCommit(msg, gitUser || undefined);
+				addToast("Committed successfully", "success");
+			} catch {
+				addToast("Commit failed", "error");
+			}
 		},
 		[gitCommit, gitUser],
 	);
 
 	const handleGitPush = useCallback(async () => {
-		await gitPush(gitToken || undefined, gitUser || undefined);
+		try {
+			await gitPush(gitToken || undefined, gitUser || undefined);
+			addToast("Pushed successfully", "success");
+		} catch {
+			addToast("Push failed", "error");
+		}
 	}, [gitPush, gitToken, gitUser]);
 
 	const handleStashPush = useCallback(async (message?: string) => {
@@ -534,11 +665,16 @@ export function App() {
 				onSwitchSession={handleSwitchSession}
 				onNewSession={handleNewSession}
 				onDeleteSession={handleDeleteSession}
+				onPinSession={pinSession}
+				onUnpinSession={unpinSession}
+				onReorderSession={reorderSessions}
 				onOpenDashboard={handleOpenDashboard}
 				onOpenSettings={() => setActiveView("settings")}
 				onOpenSkills={() => setActiveView("skills")}
+				onOpenUsage={() => setActiveView("usage")}
 				onToggleTheme={handleToggleTheme}
 				resolvedTheme={resolvedTheme}
+				zaiPlanEnabled={zaiPlanEnabled}
 			/>
 			<main ref={mainRef} className="flex-1 min-w-0 h-full flex gap-2">
 				<div
@@ -596,6 +732,17 @@ export function App() {
 							onClearFeedback={skillsClearFeedback}
 							onClose={() => setActiveView("chat")}
 						/>
+					) : activeView === "usage" ? (
+						<UsageView
+							projects={projects}
+							zaiPlanEnabled={zaiPlanEnabled}
+							planTimerStart={planTimerStart}
+							sessionCost={sessionCost}
+							estimatedTokens={estimatedTokens}
+							messageCount={messages.filter((m) => m.role === "user").length}
+							onTogglePlan={handleToggleZaiPlan}
+							onClose={() => setActiveView("chat")}
+						/>
 					) : (
 						<ChatView
 							ref={chatViewRef}
@@ -607,8 +754,7 @@ export function App() {
 							estimatedTokens={estimatedTokens}
 							showGitPanel={showGitPanel}
 							onToggleGitPanel={() => setShowGitPanel((p) => !p)}
-							showUsagePanel={showUsagePanel}
-							onToggleUsagePanel={() => setShowUsagePanel((p) => !p)}
+							onOpenUsage={() => setActiveView("usage")}
 							zaiPlanEnabled={zaiPlanEnabled}
 							hasGitChanges={
 								gitStatus
@@ -622,6 +768,8 @@ export function App() {
 							onGetSkillContent={(directory) =>
 								electrobun.rpc?.request.skillsGetContent({ directory }) ?? Promise.resolve("")
 							}
+							onDeleteMessage={handleDeleteMessage}
+							onEditMessage={handleEditMessage}
 						/>
 					)}
 				</div>
@@ -665,19 +813,6 @@ export function App() {
 						/>
 					</div>
 				)}
-				{activeView === "chat" && showUsagePanel && (
-					<div className="w-80 shrink-0 rounded-xl overflow-hidden border border-border/60 bg-card/30 h-full">
-						<UsagePanel
-							zaiPlanEnabled={zaiPlanEnabled}
-							planTimerStart={planTimerStart}
-							sessionCost={sessionCost}
-							estimatedTokens={estimatedTokens}
-							messageCount={messages.filter((m) => m.role === "user").length}
-							onTogglePlan={handleToggleZaiPlan}
-							onClose={() => setShowUsagePanel(false)}
-						/>
-					</div>
-				)}
 			</main>
 			<AddProjectDialog
 				open={showAddProjectDialog}
@@ -692,9 +827,38 @@ export function App() {
 				onApiKeyChange={setApiKey}
 				onBaseUriChange={setBaseUri}
 			/>
-			{toast && (
-				<div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-border/60 bg-card px-4 py-2 text-sm text-foreground shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200">
-					{toast}
+			<ToastContainer toasts={toasts} />
+			{showShortcuts && (
+				<div
+					className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm"
+					onClick={() => setShowShortcuts(false)}
+				>
+					<div
+						className="rounded-xl border border-border/60 bg-card shadow-xl p-6 w-80"
+						onClick={(e) => e.stopPropagation()}
+					>
+						<div className="flex items-center justify-between mb-4">
+							<h2 className="text-sm font-semibold">Keyboard Shortcuts</h2>
+							<button
+								type="button"
+								onClick={() => setShowShortcuts(false)}
+								className="rounded-md p-1 text-muted-foreground hover:text-foreground transition-colors"
+							>
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+									<path d="M18 6 6 18M6 6l12 12" />
+								</svg>
+							</button>
+						</div>
+						<div className="space-y-2.5">
+							<ShortcutRow keys={["Ctrl", "N"]} desc="New chat" />
+							<ShortcutRow keys={["Ctrl", "B"]} desc="Toggle sidebar" />
+							<ShortcutRow keys={["Ctrl", "K"]} desc="Focus input" />
+							<ShortcutRow keys={["Ctrl", "/"]} desc="Show shortcuts" />
+							<ShortcutRow keys={["Enter"]} desc="Send message" />
+							<ShortcutRow keys={["Shift", "Enter"]} desc="New line" />
+							<ShortcutRow keys={["Esc"]} desc="Close dialog" />
+						</div>
+					</div>
 				</div>
 			)}
 		</div>

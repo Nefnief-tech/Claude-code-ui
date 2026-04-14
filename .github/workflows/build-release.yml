@@ -24,11 +24,135 @@ jobs:
 
       - run: bun run build:stable
 
+      # --- Linux: self-extracting .run installer ---
+      - name: Create Linux installer
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          APP_DIR="build/stable-linux-x64/cc-uui"
+          OUT="dist/cc-uui-linux-x64.run"
+
+          cat > "$OUT" << 'HEADER'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          INSTALL_DIR="$HOME/.local/share/cc-uui"
+          DESKTOP_FILE="$HOME/.local/applications/cc-uui.desktop"
+          EXTRACT=0
+
+          for arg in "$@"; do
+            case "$arg" in
+              --help|-h)
+                echo "cc-uui — AI coding assistant"
+                echo ""
+                echo "  (no args)    Install & launch (first run) or just launch"
+                echo "  --install    Force re-install"
+                echo "  --uninstall  Remove cc-uui"
+                exit 0
+                ;;
+              --install) EXTRACT=1 ;;
+              --uninstall)
+                echo "Removing cc-uui..."
+                rm -rf "$INSTALL_DIR"
+                rm -f "$DESKTOP_FILE"
+                rm -f "$HOME/.local/bin/cc-uui"
+                echo "Done."
+                exit 0
+                ;;
+            esac
+          done
+
+          if [ "$EXTRACT" -eq 1 ] || [ ! -f "$INSTALL_DIR/bin/launcher" ]; then
+            echo "Installing cc-uui to $INSTALL_DIR ..."
+            mkdir -p "$INSTALL_DIR"
+            sed '1,/^#__PAYLOAD__/d' "$0" | tar xz -C "$INSTALL_DIR"
+            chmod +x "$INSTALL_DIR/bin/launcher"
+
+            mkdir -p "$(dirname "$DESKTOP_FILE")"
+            cat > "$DESKTOP_FILE" << DESKTOP
+          [Desktop Entry]
+          Type=Application
+          Name=cc-uui
+          Comment=AI coding assistant
+          Exec=$INSTALL_DIR/bin/launcher
+          Icon=$INSTALL_DIR/Resources/icon.png
+          Terminal=false
+          Categories=Development;
+          DESKTOP
+
+            if [ -d "$HOME/.local/bin" ]; then
+              ln -sf "$INSTALL_DIR/bin/launcher" "$HOME/.local/bin/cc-uui"
+            fi
+            echo "Installed. Launching..."
+          fi
+
+          exec "$INSTALL_DIR/bin/launcher" "$@"
+          exit 0
+          #__PAYLOAD__
+          HEADER
+
+          tar cz -C "$APP_DIR" . >> "$OUT"
+          chmod +x "$OUT"
+          echo "Linux installer size: $(du -h "$OUT" | cut -f1)"
+
+      # --- Windows: compile C# SFX stub, append zip payload → single .exe ---
+      - name: Create Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # 1. Zip the built app
+          $appDir = Resolve-Path "build\stable-win-x64\cc-uui"
+          $payloadZip = "dist\payload.zip"
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          if (Test-Path $payloadZip) { Remove-Item $payloadZip }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($appDir.Path, $payloadZip)
+
+          # 2. Compile the C# SFX stub (csc is on windows-latest via .NET Framework)
+          $stubCs = "scripts\sfx-stub.cs"
+          $stubExe = "dist\sfx-stub.exe"
+          $csc = "${env:WINDIR}\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (-not (Test-Path $csc)) {
+            # Fallback: find csc from .NET SDK
+            $csc = (Get-ChildItem -Recurse "${env:ProgramFiles}\dotnet\sdk" -Filter "csc.dll" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          # Use Roslyn csc.exe from .NET SDK if available, otherwise Framework csc
+          $roslyn = Get-ChildItem -Recurse "${env:ProgramFiles}\dotnet\sdk" -Filter "Roslyn\csc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($roslyn) { $csc = $roslyn.FullName }
+
+          Write-Host "Compiling SFX stub..."
+          & $csc -nologo -optimize -target:winexe -out:$stubExe -r:System.IO.Compression.FileSystem.dll $stubCs
+          if ($LASTEXITCODE -ne 0) { throw "csc compilation failed" }
+
+          # 3. Combine: stub exe + marker + zip payload -> single .exe
+          $marker = [System.Text.Encoding]::ASCII.GetBytes("__CCUUI_PAYLOAD__")
+          $finalExe = "dist\cc-uui-windows-x64.exe"
+
+          $stubBytes = [IO.File]::ReadAllBytes($stubExe)
+          $zipBytes = [IO.File]::ReadAllBytes($payloadZip)
+
+          $fs = [IO.File]::Create($finalExe)
+          $fs.Write($stubBytes, 0, $stubBytes.Length)
+          $fs.Write($marker, 0, $marker.Length)
+          $fs.Write($zipBytes, 0, $zipBytes.Length)
+          $fs.Close()
+
+          $size = [math]::Round((Get-Item $finalExe).Length / 1MB, 1)
+          Write-Host "Windows installer size: $size MB"
+
+          # Clean up intermediates
+          Remove-Item $stubExe -ErrorAction SilentlyContinue
+          Remove-Item $payloadZip -ErrorAction SilentlyContinue
+
       - uses: actions/upload-artifact@v4
         with:
           name: build-${{ runner.os }}
-          path: artifacts/
-          if-no-files-found: error
+          path: |
+            dist/cc-uui-linux-x64.run
+            dist/cc-uui-windows-x64.exe
+          if-no-files-found: warn
 
   release:
     needs: build

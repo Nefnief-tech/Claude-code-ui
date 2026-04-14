@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { Project, Session } from "@/lib/use-projects";
 import { cn } from "@/lib/utils";
 
@@ -18,16 +18,21 @@ export function Sidebar({
 	onSwitchSession,
 	onNewSession,
 	onDeleteSession,
+	onPinSession,
+	onUnpinSession,
+	onReorderSession,
 	onOpenDashboard,
 	onOpenSettings,
 	onOpenSkills,
+	onOpenUsage,
 	onToggleTheme,
 	resolvedTheme,
+	zaiPlanEnabled,
 }: {
 	projects: Project[];
 	activeProjectId: string | null;
 	activeSessionId: string | null;
-	activeView: "chat" | "dashboard" | "settings" | "skills";
+	activeView: "chat" | "dashboard" | "settings" | "skills" | "usage";
 	sessions: Session[];
 	gitDiffSummary?: { insertions: number; deletions: number } | null;
 	collapsed: boolean;
@@ -39,11 +44,16 @@ export function Sidebar({
 	onSwitchSession: (id: string) => void;
 	onNewSession: () => void;
 	onDeleteSession: (id: string) => void;
+	onPinSession?: (id: string) => void;
+	onUnpinSession?: (id: string) => void;
+	onReorderSession?: (sessionId: string, toIndex: number) => void;
 	onOpenDashboard: () => void;
 	onOpenSettings: () => void;
 	onOpenSkills: () => void;
+	onOpenUsage: () => void;
 	onToggleTheme: () => void;
 	resolvedTheme: "light" | "dark";
+	zaiPlanEnabled?: boolean;
 }) {
 	return (
 		<aside
@@ -153,6 +163,9 @@ export function Sidebar({
 							onRenameProject={onRenameProject}
 							onSwitchSession={onSwitchSession}
 							onDeleteSession={onDeleteSession}
+							onPinSession={onPinSession}
+							onUnpinSession={onUnpinSession}
+							onReorderSession={onReorderSession}
 						/>
 					))}
 				</div>
@@ -250,6 +263,36 @@ export function Sidebar({
 				</button>
 				<button
 					type="button"
+					onClick={onOpenUsage}
+					className={cn(
+						"relative rounded-lg p-2 transition-colors",
+						activeView === "usage"
+							? "bg-accent text-accent-foreground"
+							: "text-muted-foreground hover:bg-accent hover:text-foreground",
+					)}
+					title="Usage"
+				>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+					>
+						<path d="M12 20V10" />
+						<path d="M18 20V4" />
+						<path d="M6 20v-4" />
+					</svg>
+					{zaiPlanEnabled && activeView !== "usage" && (
+						<span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+					)}
+				</button>
+				<button
+					type="button"
 					onClick={onToggleTheme}
 					className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
 					title={`Switch to ${resolvedTheme === "dark" ? "light" : "dark"} mode`}
@@ -323,11 +366,14 @@ function ProjectRow({
 	onRenameProject,
 	onSwitchSession,
 	onDeleteSession,
+	onPinSession,
+	onUnpinSession,
+	onReorderSession,
 }: {
 	project: Project;
 	isActive: boolean;
 	activeSessionId: string | null;
-	activeView: "chat" | "dashboard" | "settings" | "skills";
+	activeView: "chat" | "dashboard" | "settings" | "skills" | "usage";
 	sessions: Session[];
 	gitDiffSummary?: { insertions: number; deletions: number } | null;
 	onSwitchProject: (id: string) => void;
@@ -335,9 +381,51 @@ function ProjectRow({
 	onRenameProject: (id: string, name: string) => void;
 	onSwitchSession: (id: string) => void;
 	onDeleteSession: (id: string) => void;
+	onPinSession?: (id: string) => void;
+	onUnpinSession?: (id: string) => void;
+	onReorderSession?: (sessionId: string, toIndex: number) => void;
 }) {
 	const [renaming, setRenaming] = useState(false);
 	const [renameValue, setRenameValue] = useState(project.name);
+	const dragId = useRef<string | null>(null);
+	const dragOverId = useRef<string | null>(null);
+	const [dragOver, setDragOver] = useState<string | null>(null);
+
+	const sorted = [...sessions].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+
+	const handleDragStart = useCallback((e: React.DragEvent, id: string) => {
+		dragId.current = id;
+		e.dataTransfer.effectAllowed = "move";
+		e.dataTransfer.setData("text/plain", id);
+	}, []);
+
+	const handleDragOver = useCallback((e: React.DragEvent, id: string) => {
+		e.preventDefault();
+		e.dataTransfer.dropEffect = "move";
+		if (dragOverId.current !== id) {
+			dragOverId.current = id;
+			setDragOver(id);
+		}
+	}, []);
+
+	const handleDrop = useCallback((e: React.DragEvent, targetId: string) => {
+		e.preventDefault();
+		const fromId = dragId.current;
+		if (!fromId || fromId === targetId) return;
+		const fromIdx = sorted.findIndex((s) => s.id === fromId);
+		const toIdx = sorted.findIndex((s) => s.id === targetId);
+		if (fromIdx === -1 || toIdx === -1) return;
+		onReorderSession?.(fromId, toIdx);
+		dragId.current = null;
+		dragOverId.current = null;
+		setDragOver(null);
+	}, [sorted, onReorderSession]);
+
+	const handleDragEnd = useCallback(() => {
+		dragId.current = null;
+		dragOverId.current = null;
+		setDragOver(null);
+	}, []);
 
 	const handleStartRename = (e: React.MouseEvent) => {
 		e.stopPropagation();
@@ -483,15 +571,21 @@ function ProjectRow({
 
 			{/* Sessions under active project */}
 			{isActive &&
-				sessions.map((session) => (
+				sorted.map((session) => (
 					<div
 						key={session.id}
+						draggable
+						onDragStart={(e) => handleDragStart(e, session.id)}
+						onDragOver={(e) => handleDragOver(e, session.id)}
+						onDrop={(e) => handleDrop(e, session.id)}
+						onDragEnd={handleDragEnd}
 						className={cn(
 							"group flex items-center gap-2 pl-9 pr-2 py-1.5 rounded-lg cursor-pointer text-[13px] transition-all",
 							session.id === activeSessionId &&
 								activeView === "chat"
 								? "bg-primary/10 text-foreground font-medium"
 								: "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+							dragOver === session.id && "ring-1 ring-primary/40 bg-primary/5",
 						)}
 						onClick={() => onSwitchSession(session.id)}
 					>
@@ -509,30 +603,55 @@ function ProjectRow({
 						>
 							<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
 						</svg>
-						<span className="flex-1 truncate">{session.title}</span>
-						<button
-							type="button"
-							onClick={(e) => {
-								e.stopPropagation();
-								onDeleteSession(session.id);
-							}}
-							className="shrink-0 rounded-md p-1 opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
-							title="Delete session"
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								width="12"
-								height="12"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							>
-								<path d="M18 6 6 18M6 6l12 12" />
+						{session.pinned && (
+							<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" stroke="none" className="shrink-0 text-primary/60">
+								<path d="M16 3a1 1 0 0 1 .7.3l4 4a1 1 0 0 1-.37 1.62l-3 1.2-2.83 2.83 .8 4.83a1 1 0 0 1-1.67.88L10 15.41l-5.3 5.3a1 1 0 0 1-1.41-1.42l5.3-5.3-3.25-3.63a1 1 0 0 1 .88-1.66l4.83.8 2.83-2.83 1.2-3A1 1 0 0 1 16 3Z" />
 							</svg>
-						</button>
+						)}
+						<span className="flex-1 truncate">{session.title}</span>
+						<div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+							<button
+								type="button"
+								onClick={(e) => {
+									e.stopPropagation();
+									session.pinned ? onUnpinSession?.(session.id) : onPinSession?.(session.id);
+								}}
+								className={cn(
+									"shrink-0 rounded-md p-1 transition-all",
+									session.pinned
+										? "text-primary/60 hover:text-primary"
+										: "hover:bg-accent/60",
+								)}
+								title={session.pinned ? "Unpin session" : "Pin session"}
+							>
+								<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill={session.pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+									<path d="M12 17v5" /><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76Z" />
+								</svg>
+							</button>
+							<button
+								type="button"
+								onClick={(e) => {
+									e.stopPropagation();
+									onDeleteSession(session.id);
+								}}
+								className="shrink-0 rounded-md p-1 hover:bg-destructive/10 hover:text-destructive transition-all"
+								title="Delete session"
+							>
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								>
+									<path d="M18 6 6 18M6 6l12 12" />
+								</svg>
+							</button>
+						</div>
 					</div>
 				))}
 		</div>
